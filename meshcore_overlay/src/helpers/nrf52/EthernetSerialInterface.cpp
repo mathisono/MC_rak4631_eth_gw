@@ -3,7 +3,7 @@
 #ifdef WITH_ETHERNET_TCP_API
 
 #ifndef ETH_DEBUG_LOGGING
-#define ETH_DEBUG_LOGGING 1
+#define ETH_DEBUG_LOGGING 0
 #endif
 
 #if ETH_DEBUG_LOGGING && ARDUINO
@@ -80,9 +80,14 @@ bool EthernetSerialInterface::startEthernet() {
   resetEthernet();
 
 #ifdef ETH_SPI_PORT
-  ETH_SPI_PORT.setSCK(ETH_SPI_SCK);
-  ETH_SPI_PORT.setMISO(ETH_SPI_MISO);
-  ETH_SPI_PORT.setMOSI(ETH_SPI_MOSI);
+  // On RAK4631 the actual SPI1 pins should come from variant.h by setting
+  // SPI_INTERFACES_COUNT=2 and PIN_SPI1_* macros. Do not call non-portable
+  // setter names here by default; different cores expose different APIs.
+  // If a local core requires explicit pin assignment, define ETH_SPI_SET_PINS
+  // and provide a SPIClass::setPins(sck, miso, mosi)-compatible core.
+#ifdef ETH_SPI_SET_PINS
+  ETH_SPI_PORT.setPins(ETH_SPI_SCK, ETH_SPI_MISO, ETH_SPI_MOSI);
+#endif
   ETH_SPI_PORT.begin();
   Ethernet.init(ETH_SPI_PORT, PIN_ETHERNET_SS);
 #else
