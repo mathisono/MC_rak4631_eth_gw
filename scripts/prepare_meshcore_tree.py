@@ -4,8 +4,8 @@ Prepare an upstream MeshCore checkout to build the RAK4631 Companion API target.
 
 Primary target now means:
 - MeshCore companion_radio firmware
-- Companion binary app API over BLE
-- Companion binary app API over RAK13800 Ethernet TCP
+- Companion app API over BLE
+- Companion app API over RAK13800 Ethernet TCP
 - client repeat forced on for repeater-like behavior
 - no MQTT in the default build
 """
@@ -165,9 +165,6 @@ def patch_rak4631_variant(meshcore: Path) -> None:
 
     old_spi_count = "#define SPI_INTERFACES_COUNT 1"
     new_spi_count = """#if defined(WITH_ETHERNET_TCP_API) || defined(WITH_ETHERNET_COMMAND_API) || defined(WITH_DUAL_BLE_ETHERNET_COMPANION_API)
-// RAK13800/W5100S Ethernet module uses the WisBlock IO-slot SPI bus.
-// RAK4631 LoRa uses a separate SPI bus on pins 43/44/45, so Ethernet
-// must use SPI1 on WB_SPI pins 3/29/30 with CS on 26.
 #define SPI_INTERFACES_COUNT 2
 #else
 #define SPI_INTERFACES_COUNT 1
@@ -210,8 +207,10 @@ def patch_platformio(meshcore: Path, overlay: Path) -> None:
         print("platformio env already present")
         return
 
-    addon = read(overlay / "meshcore_overlay" / "variants" / "rak4631_eth_gw" / "platformio.addon.ini")
-    text = text.rstrip() + "\n\n" + addon.rstrip() + "\n"
+    base = overlay / "meshcore_overlay" / "variants" / "rak4631_eth_gw"
+    app_api = read(base / "app_api.addon.ini")
+    legacy = read(base / "platformio.addon.ini")
+    text = text.rstrip() + "\n\n" + app_api.rstrip() + "\n\n" + legacy.rstrip() + "\n"
     write(path, text)
     print("patched variants/rak4631/platformio.ini")
 
