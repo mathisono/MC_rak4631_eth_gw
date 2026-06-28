@@ -73,7 +73,10 @@ class EthernetSerialInterface : public BaseSerialInterface {
   unsigned long lastMaintain;
 
   EthernetServer *server;
-  EthernetClient client;
+  // RAK13800's EthernetClient::connected() is not const, but MeshCore's
+  // interface requires isConnected() const. Keep the client mutable so the
+  // transport can report connection state without breaking the interface.
+  mutable EthernetClient client;
 
   struct FrameHeader {
     uint8_t type;
