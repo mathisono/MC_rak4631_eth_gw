@@ -10,7 +10,7 @@ on:
       target_env:
         description: "PlatformIO environment"
         required: true
-        default: "RAK_4631_repeater_eth_api"
+        default: "RAK_4631_repeater_eth_ble_api"
   push:
     paths:
       - "meshcore_overlay/**"
@@ -46,13 +46,13 @@ jobs:
       - name: Build firmware
         env:
           MESHCORE_REF: ${{ github.event.inputs.meshcore_ref || 'main' }}
-          TARGET_ENV: ${{ github.event.inputs.target_env || 'RAK_4631_repeater_eth_api' }}
+          TARGET_ENV: ${{ github.event.inputs.target_env || 'RAK_4631_repeater_eth_ble_api' }}
         run: bash scripts/build_firmware.sh
 
       - name: Upload firmware artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ github.event.inputs.target_env || 'RAK_4631_repeater_eth_api' }}
+          name: ${{ github.event.inputs.target_env || 'RAK_4631_repeater_eth_ble_api' }}
           path: dist/**
           if-no-files-found: error
 
