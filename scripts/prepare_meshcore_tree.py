@@ -304,14 +304,10 @@ def patch_platformio(meshcore: Path, overlay: Path) -> None:
     text = read(path)
 
     base = overlay / "meshcore_overlay" / "variants" / "rak4631_eth_gw"
-    app_api = read(base / "app_api.addon.ini").rstrip()
-    legacy = read(base / "platformio.addon.ini").rstrip()
-
-    if app_api not in text:
-        text = text.rstrip() + "\n\n" + app_api + "\n"
-
-    if legacy not in text:
-        text = text.rstrip() + "\n\n" + legacy + "\n"
+    for addon in sorted(base.glob("*.addon.ini")):
+        addon_text = read(addon).rstrip()
+        if addon_text not in text:
+            text = text.rstrip() + "\n\n" + addon_text + "\n"
 
     write(path, text)
     print("patched variants/rak4631/platformio.ini")
