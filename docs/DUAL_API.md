@@ -1,103 +1,82 @@
-# BLE + Ethernet repeater API mode
+# BLE + Ethernet Companion app API mode
 
-Yes: the repeater firmware can expose the same repeater command/API path over both BLE and Ethernet.
+The MeshCore phone app needs the Companion app API, not the line-oriented repeater command API.
 
 Primary target:
 
 ```text
-RAK_4631_repeater_eth_ble_api
+RAK_4631_companion_repeater_eth_ble
 ```
 
 ## Architecture
 
 ```text
-MeshCore simple_repeater
+MeshCore companion_radio
         |
         v
- the_mesh.handleCommand(...)
+ Companion app API handler
         ^
         |
-+----------------------+----------------------+
-|                                             |
-EthernetCommandAPI                           BLECommandAPI
-TCP port 4403                                BLE UART
-line-oriented text commands                  line-oriented text commands
++-------------------------+-------------------------+
+|                                                   |
+SerialBLEInterface                                 EthernetSerialInterface
+MeshCore app over BLE                              MeshCore app over TCP/Ethernet
 ```
 
-Both transports feed the same MeshCore repeater command handler.
+`DualSerialInterface` multiplexes the two transports into the single `BaseSerialInterface` pointer that `companion_radio` expects.
 
 This is not MQTT.
 
-This is also not the MeshCore Companion binary app API. It is the repeater/CommonCLI command API exposed over two transports.
+This is the app-compatible Companion API path.
 
-## Ethernet usage
+## Repeater behavior
 
-Connect to the device IP on TCP port 4403 and send text commands ending in `\r` or `\n`.
+This target uses `companion_radio`, not `simple_repeater`, because the app API already lives in `companion_radio`.
 
-Example:
-
-```bash
-printf 'get name\r' | nc DEVICE_IP 4403
-```
-
-Expected first line on connection:
+Repeater-like behavior is enabled by forcing:
 
 ```text
-MeshCore repeater Ethernet API ready
+FORCE_CLIENT_REPEAT=1
 ```
+
+That sets the companion firmware's `client_repeat` preference on boot.
 
 ## BLE usage
 
-The BLE side uses MeshCore's encrypted BLE UART helper. It advertises with this prefix by default:
+Use the normal MeshCore app BLE workflow. The BLE side uses MeshCore's existing BLE UART transport through `SerialBLEInterface`.
+
+## Ethernet usage
+
+Ethernet exposes the same Companion app frame transport over TCP port 4403.
 
 ```text
-MC-RPT-
+DEVICE_IP:4403
 ```
 
-Default BLE pairing PIN:
-
-```text
-123456
-```
-
-A BLE UART client can send the same line-oriented commands:
-
-```text
-get name
-get freq
-get tx
-advert
-```
+A client must speak the MeshCore Companion frame protocol. Plain `nc` text commands are not valid for this target.
 
 ## Build target defaults
 
 The local build script and GitHub Actions now default to:
 
 ```text
-RAK_4631_repeater_eth_ble_api
+RAK_4631_companion_repeater_eth_ble
 ```
 
 Expected flash artifact:
 
 ```text
-dist/RAK_4631_repeater_eth_ble_api/firmware.zip
+dist/RAK_4631_companion_repeater_eth_ble/firmware.zip
 ```
 
 ## Related targets
 
 ```text
-RAK_4631_repeater_eth_ble_api     primary: repeater + Ethernet API + BLE API, no MQTT
-RAK_4631_repeater_eth_api         Ethernet-only fallback, no MQTT
-RAK_4631_repeater_eth_ble_api_mqtt optional future combined MQTT target
-RAK_4631_companion_radio_eth      legacy/experimental Companion binary API over Ethernet
+RAK_4631_companion_repeater_eth_ble  primary: app API over BLE + Ethernet, repeat forced on, no MQTT
+RAK_4631_companion_repeater_eth      Ethernet-only app API, repeat forced on, no MQTT
+RAK_4631_repeater_eth_api            experimental text command server, not app-compatible
 ```
 
-## Notes
+## Important note
 
-BLE and Ethernet can run at the same time because they are independent transports. They should not both own the mesh stack; they should only pass commands into the existing repeater handler.
-
-If flash or RAM becomes tight, fall back to the Ethernet-only target first:
-
-```bash
-TARGET_ENV=RAK_4631_repeater_eth_api bash scripts/build_firmware.sh
-```
+The earlier `BLECommandAPI` / `EthernetCommandAPI` path is for text commands only. It is not compatible with the MeshCore phone app. Keep it as a diagnostic fallback, but do not use it as the main firmware path.
