@@ -58,6 +58,97 @@ def copy_overlay(overlay: Path, meshcore: Path) -> None:
         print(f"copied src/helpers/{name}")
 
 
+def patch_ethernet_serial_interface(meshcore: Path) -> None:
+    path = meshcore / "src" / "helpers" / "nrf52" / "EthernetSerialInterface.cpp"
+    text = read(path)
+
+    text = replace_once(
+        text,
+        """    : deviceConnected(false), ethernetReady(false), _isEnabled(false), _port(TCP_PORT),
+      lastDhcpAttempt(0), lastMaintain(0), server(nullptr), client(EthernetClient()) {
+""",
+        """    : deviceConnected(false), ethernetReady(false), ethernetStarted(false), _isEnabled(false), _port(TCP_PORT),
+      beginMillis(0), lastDhcpAttempt(0), lastMaintain(0), server(nullptr), client(EthernetClient()) {
+""",
+        "ethernet delayed-start constructor",
+    )
+
+    text = replace_once(
+        text,
+        """bool EthernetSerialInterface::startEthernet() {
+  powerUpEthernet();
+""",
+        """bool EthernetSerialInterface::startEthernet() {
+  ethernetStarted = true;
+  powerUpEthernet();
+""",
+        "ethernetStarted marker",
+    )
+
+    text = replace_once(
+        text,
+        """void EthernetSerialInterface::begin(int port) {
+  _port = port;
+
+  if (!startEthernet()) {
+    // Leave server unset until DHCP succeeds during serviceEthernet().
+    return;
+  }
+
+  if (server) {
+    delete server;
+  }
+  server = new EthernetServer(_port);
+  server->begin();
+  ETH_DEBUG_PRINTLN("TCP companion server listening on %d", _port);
+}
+""",
+        """void EthernetSerialInterface::begin(int port) {
+  _port = port;
+  beginMillis = millis();
+  lastDhcpAttempt = beginMillis;
+
+#if ETH_START_DELAY_MS == 0
+  if (!startEthernet()) {
+    return;
+  }
+
+  if (server) {
+    delete server;
+  }
+  server = new EthernetServer(_port);
+  server->begin();
+  ETH_DEBUG_PRINTLN("TCP companion server listening on %d", _port);
+#else
+  ETH_DEBUG_PRINTLN("Ethernet startup delayed by %lu ms", (unsigned long)ETH_START_DELAY_MS);
+#endif
+}
+""",
+        "delayed Ethernet begin",
+    )
+
+    text = replace_once(
+        text,
+        """  if (!ethernetReady) {
+    if (now - lastDhcpAttempt >= ETH_DHCP_RETRY_MS) {
+      if (startEthernet()) {
+""",
+        """  if (!ethernetReady) {
+#if ETH_START_DELAY_MS > 0
+    if (!ethernetStarted && now - beginMillis < ETH_START_DELAY_MS) {
+      return;
+    }
+#endif
+    if (!ethernetStarted || now - lastDhcpAttempt >= ETH_DHCP_RETRY_MS) {
+      if (startEthernet()) {
+""",
+        "delayed Ethernet service retry",
+    )
+
+    write(path, text)
+    print("patched src/helpers/nrf52/EthernetSerialInterface.cpp for delayed Ethernet startup")
+
+
 def patch_companion_main(meshcore: Path) -> None:
     path = meshcore / "examples" / "companion_radio" / "main.cpp"
     text = read(path)
@@ -230,6 +321,7 @@ def main() -> None:
         raise SystemExit(f"not this overlay repo: {overlay}")
 
     copy_overlay(overlay, meshcore)
+    patch_ethernet_serial_interface(meshcore)
     patch_companion_main(meshcore)
     patch_companion_mymesh(meshcore)
     patch_rak4631_variant(meshcore)
