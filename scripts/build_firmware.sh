@@ -30,6 +30,12 @@ if ! command -v pio >/dev/null 2>&1; then
   export PATH="$HOME/.local/bin:$PATH"
 fi
 
+if ! command -v adafruit-nrfutil >/dev/null 2>&1; then
+  echo "adafruit-nrfutil not found; installing for current Python user"
+  python3 -m pip install --user --upgrade adafruit-nrfutil
+  export PATH="$HOME/.local/bin:$PATH"
+fi
+
 cd "$MESHCORE_DIR"
 
 echo "building $TARGET_ENV"
@@ -50,6 +56,18 @@ find "$BUILD_DIR" -maxdepth 1 -type f \
   \( -name 'firmware.*' -o -name '*.uf2' -o -name '*.zip' -o -name '*.hex' -o -name '*.bin' -o -name '*.elf' -o -name '*.map' \) \
   -exec cp -v {} "$DIST_DIR/" \;
 
+# Make an explicit bootloader-friendly DFU zip for RAK4631/nRF52.
+# This is the artifact to try first when the device rejects raw build output.
+DFU_ZIP="$DIST_DIR/${TARGET_ENV}-dfu.zip"
+python3 "$REPO_ROOT/scripts/package_nrf52_dfu.py" \
+  --meshcore "$MESHCORE_DIR" \
+  --build-dir "$BUILD_DIR" \
+  --out "$DFU_ZIP" \
+  --target-env "$TARGET_ENV"
+
+# Backward-compatible generic name for tools/docs that expect firmware.zip.
+cp -v "$DFU_ZIP" "$DIST_DIR/firmware.zip"
+
 # Record enough context to reproduce the artifact.
 {
   echo "target_env=$TARGET_ENV"
@@ -57,8 +75,12 @@ find "$BUILD_DIR" -maxdepth 1 -type f \
   echo "meshcore_ref=$MESHCORE_REF"
   echo "meshcore_commit=$(git -C "$MESHCORE_DIR" rev-parse HEAD)"
   echo "overlay_commit=$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || echo unknown)"
+  echo "nrf_dfu_sd_req=${NRF_DFU_SD_REQ:-auto-from-boards/rak4631.json}"
+  echo "nrf_dfu_dev_type=${NRF_DFU_DEV_TYPE:-0x0052}"
+  echo "nrf_dfu_app_version=${NRF_DFU_APP_VERSION:-1}"
   echo "built_at_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 } > "$DIST_DIR/BUILD_INFO.txt"
 
 ls -lah "$DIST_DIR"
 echo "done: $DIST_DIR"
+echo "flash this first: $DIST_DIR/firmware.zip"
