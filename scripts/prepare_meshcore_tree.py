@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Prepare an upstream MeshCore checkout to build the RAK4631 Ethernet repeater API target.
+Prepare an upstream MeshCore checkout to build the RAK4631 repeater API target.
 
 This script is intentionally idempotent. It copies this repo's overlay files into
 MeshCore and applies small source/config edits needed for the new build env.
@@ -12,7 +12,7 @@ import argparse
 import shutil
 from pathlib import Path
 
-TARGET_ENV = "RAK_4631_repeater_eth_api"
+TARGET_ENV = "RAK_4631_repeater_eth_ble_api"
 
 
 def read(path: Path) -> str:
@@ -37,6 +37,8 @@ def copy_overlay(overlay: Path, meshcore: Path) -> None:
     dst_dir.mkdir(parents=True, exist_ok=True)
 
     for name in (
+        "BLECommandAPI.h",
+        "BLECommandAPI.cpp",
         "EthernetCommandAPI.h",
         "EthernetCommandAPI.cpp",
         "EthernetSerialInterface.h",
@@ -59,10 +61,13 @@ def patch_simple_repeater_main(meshcore: Path) -> None:
 #ifdef WITH_ETHERNET_COMMAND_API
   #include <helpers/nrf52/EthernetCommandAPI.h>
 #endif
+#ifdef WITH_BLE_COMMAND_API
+  #include <helpers/nrf52/BLECommandAPI.h>
+#endif
 
 #include "MyMesh.h"
 """
-    text = replace_once(text, include_anchor, include_replacement, "simple_repeater ethernet include")
+    text = replace_once(text, include_anchor, include_replacement, "simple_repeater API includes")
 
     global_anchor = """MyMesh the_mesh(board, radio_driver, *new ArduinoMillis(), fast_rng, rtc_clock, tables);
 
@@ -74,10 +79,14 @@ void halt() {
 EthernetCommandAPI eth_api;
 static char eth_command[160];
 #endif
+#ifdef WITH_BLE_COMMAND_API
+BLECommandAPI ble_api;
+static char ble_command[160];
+#endif
 
 void halt() {
 """
-    text = replace_once(text, global_anchor, global_replacement, "simple_repeater ethernet globals")
+    text = replace_once(text, global_anchor, global_replacement, "simple_repeater API globals")
 
     setup_anchor = """  the_mesh.begin(fs);
 
@@ -88,10 +97,13 @@ void halt() {
 #ifdef WITH_ETHERNET_COMMAND_API
   eth_api.begin(ETH_API_PORT);
 #endif
+#ifdef WITH_BLE_COMMAND_API
+  ble_api.begin(the_mesh.getNodePrefs()->node_name, BLE_API_PIN_CODE);
+#endif
 
 #ifdef DISPLAY_CLASS
 """
-    text = replace_once(text, setup_anchor, setup_replacement, "simple_repeater ethernet begin")
+    text = replace_once(text, setup_anchor, setup_replacement, "simple_repeater API begin")
 
     loop_anchor = """  if (len > 0 && command[len - 1] == '\\r') {  // received complete line
     Serial.print('\\n');
@@ -126,10 +138,18 @@ void halt() {
     eth_api.writeReply(reply);
   }
 #endif
+#ifdef WITH_BLE_COMMAND_API
+  while (ble_api.readCommand(ble_command, sizeof(ble_command))) {
+    char reply[160];
+    the_mesh.handleCommand(0, ble_command, reply);  // BLE API has no mesh sender timestamp.
+    ble_api.writeReply(reply);
+  }
+  ble_api.loop();
+#endif
 
 #if defined(PIN_USER_BTN) && defined(_SEEED_SENSECAP_SOLAR_H_)
 """
-    text = replace_once(text, loop_anchor, loop_replacement, "simple_repeater ethernet command loop")
+    text = replace_once(text, loop_anchor, loop_replacement, "simple_repeater API command loop")
 
     write(path, text)
     print("patched examples/simple_repeater/main.cpp")
