@@ -6,7 +6,7 @@ WORKDIR="${WORKDIR:-$REPO_ROOT/build}"
 MESHCORE_REF="${MESHCORE_REF:-main}"
 MESHCORE_REPO="${MESHCORE_REPO:-https://github.com/meshcore-dev/MeshCore.git}"
 MESHCORE_DIR="${MESHCORE_DIR:-$WORKDIR/MeshCore}"
-TARGET_ENV="${TARGET_ENV:-RAK_4631_companion_radio_eth}"
+TARGET_ENV="${TARGET_ENV:-RAK_4631_companion_repeater_eth_ble}"
 DIST_DIR="${DIST_DIR:-$REPO_ROOT/dist/$TARGET_ENV}"
 
 mkdir -p "$WORKDIR" "$DIST_DIR"
@@ -49,6 +49,11 @@ fi
 find "$BUILD_DIR" -maxdepth 1 -type f \
   \( -name 'firmware.*' -o -name '*.uf2' -o -name '*.zip' -o -name '*.hex' -o -name '*.bin' -o -name '*.elf' -o -name '*.map' \) \
   -exec cp -v {} "$DIST_DIR/" \;
+
+# Publish a stable DFU package name for release automation.
+if [ -f "$DIST_DIR/firmware.zip" ]; then
+  cp -v "$DIST_DIR/firmware.zip" "$DIST_DIR/${TARGET_ENV}-dfu.zip"
+fi
 
 # Record enough context to reproduce the artifact.
 {

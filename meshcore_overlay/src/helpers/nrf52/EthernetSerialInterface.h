@@ -24,6 +24,10 @@
 #define ETH_MAINTAIN_MS 1000UL
 #endif
 
+#ifndef ETH_START_DELAY_MS
+#define ETH_START_DELAY_MS 0UL
+#endif
+
 #ifndef ETH_SPI_SCK
 #define ETH_SPI_SCK 3
 #endif
@@ -67,8 +71,10 @@
 class EthernetSerialInterface : public BaseSerialInterface {
   bool deviceConnected;
   bool ethernetReady;
+  bool ethernetStarted;
   bool _isEnabled;
   uint16_t _port;
+  unsigned long beginMillis;
   unsigned long lastDhcpAttempt;
   unsigned long lastMaintain;
 
@@ -123,6 +129,7 @@ public:
   size_t checkRecvFrame(uint8_t dest[]) override;
 
   bool isEthernetReady() const { return ethernetReady; }
+  bool hasStartedEthernet() const { return ethernetStarted; }
   uint16_t port() const { return _port; }
 };
 
