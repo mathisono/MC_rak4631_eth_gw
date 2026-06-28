@@ -36,7 +36,12 @@ def copy_overlay(overlay: Path, meshcore: Path) -> None:
     dst_dir = meshcore / "src" / "helpers" / "nrf52"
     dst_dir.mkdir(parents=True, exist_ok=True)
 
-    for name in ("EthernetSerialInterface.h", "EthernetSerialInterface.cpp"):
+    for name in (
+        "EthernetSerialInterface.h",
+        "EthernetSerialInterface.cpp",
+        "CompanionDualSerialInterface.h",
+        "CompanionDualSerialInterface.cpp",
+    ):
         shutil.copy2(src_dir / name, dst_dir / name)
         print(f"copied src/helpers/nrf52/{name}")
 
@@ -55,7 +60,10 @@ def patch_companion_main(meshcore: Path) -> None:
   #endif
 """
     new_select = """#elif defined(NRF52_PLATFORM)
-  #ifdef WITH_ETHERNET_TCP_API
+  #if defined(WITH_ETHERNET_TCP_API) && defined(BLE_PIN_CODE)
+    #include <helpers/nrf52/CompanionDualSerialInterface.h>
+    CompanionDualSerialInterface serial_interface;
+  #elif defined(WITH_ETHERNET_TCP_API)
     #include <helpers/nrf52/EthernetSerialInterface.h>
     EthernetSerialInterface serial_interface;
   #elif defined(BLE_PIN_CODE)
@@ -94,7 +102,9 @@ def patch_companion_main(meshcore: Path) -> None:
     #endif
   );
 
-#ifdef WITH_ETHERNET_TCP_API
+#if defined(WITH_ETHERNET_TCP_API) && defined(BLE_PIN_CODE)
+  serial_interface.begin(BLE_NAME_PREFIX, the_mesh.getNodePrefs()->node_name, the_mesh.getBLEPin(), TCP_PORT);
+#elif defined(WITH_ETHERNET_TCP_API)
   serial_interface.begin(TCP_PORT);
 #elif defined(BLE_PIN_CODE)
   serial_interface.begin(BLE_NAME_PREFIX, the_mesh.getNodePrefs()->node_name, the_mesh.getBLEPin());
@@ -108,6 +118,51 @@ def patch_companion_main(meshcore: Path) -> None:
 
     write(path, text)
     print("patched examples/companion_radio/main.cpp")
+
+
+def patch_companion_mymesh(meshcore: Path) -> None:
+    path = meshcore / "examples" / "companion_radio" / "MyMesh.cpp"
+    text = read(path)
+
+    old_defaults = """  _prefs.tx_power_dbm = constrain(_prefs.tx_power_dbm, -9, MAX_LORA_TX_POWER);
+  _prefs.gps_enabled = constrain(_prefs.gps_enabled, 0, 1);  // Ensure boolean 0 or 1
+  _prefs.gps_interval = constrain(_prefs.gps_interval, 0, 86400);  // Max 24 hours
+
+#ifdef BLE_PIN_CODE // 123456 by default
+"""
+    new_defaults = """  _prefs.tx_power_dbm = constrain(_prefs.tx_power_dbm, -9, MAX_LORA_TX_POWER);
+  _prefs.gps_enabled = constrain(_prefs.gps_enabled, 0, 1);  // Ensure boolean 0 or 1
+  _prefs.gps_interval = constrain(_prefs.gps_interval, 0, 86400);  // Max 24 hours
+#ifdef FORCE_CLIENT_REPEAT
+  _prefs.client_repeat = 1;
+#endif
+
+#ifdef BLE_PIN_CODE // 123456 by default
+"""
+    text = replace_once(text, old_defaults, new_defaults, "client repeat default")
+
+    old_repeat = """    uint8_t repeat = 0;  // default - false
+    if (len > i) {
+      repeat = cmd_frame[i++];   // FIRMWARE_VER_CODE  9+
+    }
+
+    if (repeat && !isValidClientRepeatFreq(freq)) {
+"""
+    new_repeat = """    uint8_t repeat = 0;  // default - false
+    if (len > i) {
+      repeat = cmd_frame[i++];   // FIRMWARE_VER_CODE  9+
+    }
+
+#ifdef FORCE_CLIENT_REPEAT
+    repeat = 1;
+#endif
+
+    if (repeat && !isValidClientRepeatFreq(freq)) {
+"""
+    text = replace_once(text, old_repeat, new_repeat, "forced client repeat")
+
+    write(path, text)
+    print("patched examples/companion_radio/MyMesh.cpp")
 
 
 def patch_rak4631_variant(meshcore: Path) -> None:
@@ -183,6 +238,7 @@ def main() -> None:
 
     copy_overlay(overlay, meshcore)
     patch_companion_main(meshcore)
+    patch_companion_mymesh(meshcore)
     patch_rak4631_variant(meshcore)
     patch_platformio(meshcore, overlay)
     print("MeshCore tree prepared")
