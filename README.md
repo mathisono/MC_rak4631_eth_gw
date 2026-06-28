@@ -4,35 +4,32 @@ Firmware overlay and project tracker for adding **RAK10720 / RAK4631 + RAK13800 
 
 ## Project goal
 
-Build a MeshCore firmware target for the RAK10720 that exposes the normal MeshCore Companion API over wired Ethernet.
+Build a MeshCore **repeater** firmware target for the RAK10720 that also exposes the repeater command/API interface over wired Ethernet.
 
 ```text
 RAK10720 Ethernet
 → RAK13800 W5100S TCP server
-→ MeshCore Companion API frames
-→ Crow / MeshCore client connects to tcp://DEVICE_IP:4403
+→ MeshCore repeater CommonCLI command/API
+→ TCP client connects to DEVICE_IP:4403
 ```
 
-The first successful firmware should let Crow or a MeshCore TCP client connect to the gateway IP address and use the normal Companion API without BLE, USB, Wi-Fi, or MQTT.
+The first successful firmware should behave as a normal MeshCore repeater and respond to command/API requests over Ethernet without BLE, USB, Wi-Fi, or MQTT.
 
 ## Non-goals for the first working build
 
-MQTT is **not required** for app or Crow access. Do not block the Ethernet Companion API work on MQTT.
+MQTT is **not required**. Do not block the Ethernet repeater API work on MQTT.
 
 For now, keep MQTT bridge work parked behind `WITH_MQTT_BRIDGE`; do not remove it, but do not make it part of the required first build.
+
+The legacy Companion binary API target is kept for reference, but it is not the primary hardware target.
 
 ## Current primary deliverable
 
 ```text
-RAK_4631_companion_radio_eth
+RAK_4631_repeater_eth_api
 ```
 
-This target should expose the normal MeshCore Companion API over Ethernet TCP using the same framing as MeshCore USB/Wi-Fi Companion firmware:
-
-```text
-radio -> client:  '>' + uint16_le(length) + payload
-client -> radio:  '<' + uint16_le(length) + payload
-```
+This target should run MeshCore's `simple_repeater` role and expose the existing repeater command handler over Ethernet TCP.
 
 Expected TCP endpoint:
 
@@ -40,25 +37,37 @@ Expected TCP endpoint:
 DEVICE_IP:4403
 ```
 
+Expected command style:
+
+```text
+get name
+get freq
+get tx
+set name RAK4631-Repeater
+advert
+```
+
+The Ethernet command API is line-oriented text. Send commands with `\r` or `\n`; the firmware responds with a text line.
+
 ## Flashable artifact
 
 The file to load first on RAK4631 hardware is:
 
 ```text
-dist/RAK_4631_companion_radio_eth/firmware.zip
+dist/RAK_4631_repeater_eth_api/firmware.zip
 ```
 
-The build script now generates this as a bootloader-friendly nRF52 DFU package from PlatformIO's `firmware.hex`.
+The build script generates this as a bootloader-friendly nRF52 DFU package from PlatformIO's `firmware.hex`.
 
 The raw `.bin`, `.hex`, `.elf`, and `.map` files are collected for debugging, but they are not the primary RAK4631 serial DFU artifact.
 
 ## Optional future deliverable
 
 ```text
-RAK_4631_companion_radio_eth_mqtt
+RAK_4631_repeater_eth_api_mqtt
 ```
 
-This should only be enabled after the plain Ethernet API build works and firmware size, RAM use, and W5100S socket use are known to be safe.
+This should only be enabled after the plain repeater Ethernet API build works and firmware size, RAM use, and W5100S socket use are known to be safe.
 
 ## Target hardware
 
@@ -85,15 +94,13 @@ DHCP first; static IP later
 
 This repo intentionally starts as an overlay instead of vendoring the full MeshCore tree.
 
-Copy the files under `meshcore_overlay/` into a MeshCore checkout, then apply the patch notes in:
-
-```text
-patches/0001-add-rak4631-ethernet-companion-target.patch
-```
+The build script clones MeshCore, copies the overlay, patches the upstream tree, builds the PlatformIO target, and packages a flashable DFU zip.
 
 ## Files
 
 ```text
+meshcore_overlay/src/helpers/nrf52/EthernetCommandAPI.h
+meshcore_overlay/src/helpers/nrf52/EthernetCommandAPI.cpp
 meshcore_overlay/src/helpers/nrf52/EthernetSerialInterface.h
 meshcore_overlay/src/helpers/nrf52/EthernetSerialInterface.cpp
 meshcore_overlay/variants/rak4631_eth_gw/platformio.addon.ini
@@ -114,12 +121,16 @@ Preferred full build command from this repo:
 bash scripts/build_firmware.sh
 ```
 
-That clones MeshCore, applies the overlay, builds the PlatformIO target, and packages a flashable DFU zip.
+That now defaults to:
+
+```text
+RAK_4631_repeater_eth_api
+```
 
 Manual build inside a prepared MeshCore checkout:
 
 ```bash
-pio run -e RAK_4631_companion_radio_eth
+pio run -e RAK_4631_repeater_eth_api
 ```
 
 ## Bring-up test plan
@@ -127,16 +138,22 @@ pio run -e RAK_4631_companion_radio_eth
 Minimum success path:
 
 ```text
-1. Firmware compiles for RAK_4631_companion_radio_eth.
-2. Build emits dist/RAK_4631_companion_radio_eth/firmware.zip.
+1. Firmware compiles for RAK_4631_repeater_eth_api.
+2. Build emits dist/RAK_4631_repeater_eth_api/firmware.zip.
 3. firmware.zip flashes to RAK10720 / RAK4631 with adafruit-nrfutil.
 4. RAK13800 powers up and obtains DHCP lease.
 5. Device listens on TCP port 4403.
 6. A TCP client connects to DEVICE_IP:4403.
-7. Client sends MeshCore Companion DEVICE_QUERY / APP_START frames.
-8. Firmware returns DEVICE_INFO / SELF_INFO frames.
-9. Crow can query channel slots with CMD_GET_CHANNEL.
-10. Crow can process queued inbound messages via PUSH_CODE_MSG_WAITING + CMD_SYNC_NEXT_MESSAGE.
+7. Client sees: MeshCore repeater Ethernet API ready.
+8. Client sends: get name
+9. Firmware returns a text reply.
+10. Repeater continues normal mesh forwarding behavior.
+```
+
+Example TCP test:
+
+```bash
+printf 'get name\r' | nc DEVICE_IP 4403
 ```
 
 ## Open risks / things to verify
@@ -144,16 +161,16 @@ Minimum success path:
 - Whether the RAK13800 library exposes exactly the same `Ethernet.init(ETH_SPI_PORT, cs)` overload expected by the current transport code.
 - Whether the MeshCore RAK4631 variant needs a dedicated `rak4631_eth_gw` variant instead of conditional edits in `variants/rak4631/variant.h`.
 - Final flash size under the nRF52840 SoftDevice layout.
-- Runtime RAM use with Companion API queues plus Ethernet stack.
-- W5100S socket availability if MQTT is later enabled at the same time as the TCP Companion API.
-- Whether Crow's current TCP parser has been updated from the older `0x3E + cmd + len_be` assumption to MeshCore's real `<` / `>` little-endian frame transport.
+- Runtime RAM use with repeater role plus Ethernet stack.
+- W5100S socket availability if MQTT is later enabled at the same time as the TCP command API.
 - Whether the RAK4631 bootloader needs a DFU dev type other than `0x0052`; override with `NRF_DFU_DEV_TYPE` if hardware reports a mismatch.
+- Whether the line-oriented command API is enough for Crow, or whether Crow still needs the Companion binary API later.
 
 ## Current status
 
 ```text
-Status: build repo now generates explicit nRF52 DFU zip; not hardware-verified yet.
-Primary next step: build, flash dist/RAK_4631_companion_radio_eth/firmware.zip, and capture exact bootloader error if rejected.
+Status: primary target changed to repeater role with Ethernet command/API; not hardware-verified yet.
+Primary next step: build, flash dist/RAK_4631_repeater_eth_api/firmware.zip, and test TCP command response on port 4403.
 ```
 
 ## Change log
@@ -174,7 +191,7 @@ Added:
 
 Changed:
 
-- Ethernet transport now defaults `ETH_DEBUG_LOGGING` to `0` to reduce firmware size and serial noise.
+- Ethernet transport defaults `ETH_DEBUG_LOGGING` to `0` to reduce firmware size and serial noise.
 - SPI setup avoids non-portable `setSCK` / `setMISO` / `setMOSI` calls by default. The transport expects SPI1 pins to be supplied through MeshCore variant definitions.
 
 Known incomplete:
@@ -182,7 +199,6 @@ Known incomplete:
 - Not compile-tested.
 - Not flash-tested on RAK10720.
 - MQTT bridge is intentionally not implemented as a required feature yet.
-- Crow still needs TCP send/response work if it has not already been updated.
 
 ### 2026-06-28
 
@@ -191,27 +207,41 @@ Flashability hardening.
 Added:
 
 - `scripts/package_nrf52_dfu.py` to create a bootloader-friendly RAK4631/nRF52 DFU package from PlatformIO `firmware.hex`.
-- Build output now includes `RAK_4631_companion_radio_eth-dfu.zip` and generic `firmware.zip`.
-- `docs/FLASHING.md` now explains which file to flash and how to diagnose rejection.
+- Build output includes target-specific `*-dfu.zip` and generic `firmware.zip`.
+- `docs/FLASHING.md` explains which file to flash and how to diagnose rejection.
 
 Changed:
 
-- `scripts/build_firmware.sh` now installs/checks `adafruit-nrfutil`, builds, packages DFU zip, and records DFU metadata in `BUILD_INFO.txt`.
-- GitHub Actions now pins Python to `3.11` and installs both `platformio` and `adafruit-nrfutil`.
+- `scripts/build_firmware.sh` installs/checks `adafruit-nrfutil`, builds, packages DFU zip, and records DFU metadata in `BUILD_INFO.txt`.
+- GitHub Actions pins Python to `3.11` and installs both `platformio` and `adafruit-nrfutil`.
 
 Reason:
 
 - RAK4631 serial DFU generally will not accept raw `.bin`, `.elf`, or unpackaged `.hex`; the bootloader path needs a DFU `.zip` package.
 
+### 2026-06-28 — repeater API pivot
+
+Changed:
+
+- Primary target is now `RAK_4631_repeater_eth_api`.
+- Default local and GitHub Actions builds now use `RAK_4631_repeater_eth_api`.
+- Added `EthernetCommandAPI.h/cpp`, a line-oriented TCP command server for the repeater role.
+- `prepare_meshcore_tree.py` now patches `examples/simple_repeater/main.cpp` to call `the_mesh.handleCommand(...)` for commands received over Ethernet.
+- MQTT remains disabled in the primary target.
+
+Reason:
+
+- Hardware should run as a repeater first, with Ethernet API enabled, and should respond over Ethernet without requiring MQTT.
+
 ## Decision log
 
 ### MQTT is optional
 
-MQTT is useful for broker-based packet bridging later, but it is not needed for the app or Crow API access. The required feature is Ethernet TCP Companion API.
+MQTT is useful for broker-based packet bridging later, but it is not needed for the first repeater Ethernet API build.
 
-### Companion firmware is the base
+### Repeater firmware is the base
 
-The Ethernet API build should be based on MeshCore `companion_radio`, not `simple_repeater`, because Crow needs Companion API commands such as device query, channel query, message sync, send text, and group/channel handling.
+The primary Ethernet build is now based on MeshCore `simple_repeater`, not `companion_radio`, because the hardware needs to act as a repeater while exposing a command/API path over Ethernet.
 
 ### Overlay first, upstream-style patch later
 
