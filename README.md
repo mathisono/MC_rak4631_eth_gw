@@ -40,6 +40,18 @@ Expected TCP endpoint:
 DEVICE_IP:4403
 ```
 
+## Flashable artifact
+
+The file to load first on RAK4631 hardware is:
+
+```text
+dist/RAK_4631_companion_radio_eth/firmware.zip
+```
+
+The build script now generates this as a bootloader-friendly nRF52 DFU package from PlatformIO's `firmware.hex`.
+
+The raw `.bin`, `.hex`, `.elf`, and `.map` files are collected for debugging, but they are not the primary RAK4631 serial DFU artifact.
+
 ## Optional future deliverable
 
 ```text
@@ -87,12 +99,24 @@ meshcore_overlay/src/helpers/nrf52/EthernetSerialInterface.cpp
 meshcore_overlay/variants/rak4631_eth_gw/platformio.addon.ini
 patches/0001-add-rak4631-ethernet-companion-target.patch
 docs/CROW_COMPATIBILITY.md
+docs/FLASHING.md
 scripts/apply_overlay.sh
+scripts/build_firmware.sh
+scripts/package_nrf52_dfu.py
+scripts/prepare_meshcore_tree.py
 ```
 
 ## Build command
 
-After copying the overlay into a MeshCore checkout and applying the integration edits:
+Preferred full build command from this repo:
+
+```bash
+bash scripts/build_firmware.sh
+```
+
+That clones MeshCore, applies the overlay, builds the PlatformIO target, and packages a flashable DFU zip.
+
+Manual build inside a prepared MeshCore checkout:
 
 ```bash
 pio run -e RAK_4631_companion_radio_eth
@@ -104,14 +128,15 @@ Minimum success path:
 
 ```text
 1. Firmware compiles for RAK_4631_companion_radio_eth.
-2. Firmware flashes to RAK10720 / RAK4631.
-3. RAK13800 powers up and obtains DHCP lease.
-4. Device listens on TCP port 4403.
-5. A TCP client connects to DEVICE_IP:4403.
-6. Client sends MeshCore Companion DEVICE_QUERY / APP_START frames.
-7. Firmware returns DEVICE_INFO / SELF_INFO frames.
-8. Crow can query channel slots with CMD_GET_CHANNEL.
-9. Crow can process queued inbound messages via PUSH_CODE_MSG_WAITING + CMD_SYNC_NEXT_MESSAGE.
+2. Build emits dist/RAK_4631_companion_radio_eth/firmware.zip.
+3. firmware.zip flashes to RAK10720 / RAK4631 with adafruit-nrfutil.
+4. RAK13800 powers up and obtains DHCP lease.
+5. Device listens on TCP port 4403.
+6. A TCP client connects to DEVICE_IP:4403.
+7. Client sends MeshCore Companion DEVICE_QUERY / APP_START frames.
+8. Firmware returns DEVICE_INFO / SELF_INFO frames.
+9. Crow can query channel slots with CMD_GET_CHANNEL.
+10. Crow can process queued inbound messages via PUSH_CODE_MSG_WAITING + CMD_SYNC_NEXT_MESSAGE.
 ```
 
 ## Open risks / things to verify
@@ -122,12 +147,13 @@ Minimum success path:
 - Runtime RAM use with Companion API queues plus Ethernet stack.
 - W5100S socket availability if MQTT is later enabled at the same time as the TCP Companion API.
 - Whether Crow's current TCP parser has been updated from the older `0x3E + cmd + len_be` assumption to MeshCore's real `<` / `>` little-endian frame transport.
+- Whether the RAK4631 bootloader needs a DFU dev type other than `0x0052`; override with `NRF_DFU_DEV_TYPE` if hardware reports a mismatch.
 
 ## Current status
 
 ```text
-Status: initial overlay committed; not compile-tested yet.
-Primary next step: copy into MeshCore and build RAK_4631_companion_radio_eth.
+Status: build repo now generates explicit nRF52 DFU zip; not hardware-verified yet.
+Primary next step: build, flash dist/RAK_4631_companion_radio_eth/firmware.zip, and capture exact bootloader error if rejected.
 ```
 
 ## Change log
@@ -157,6 +183,25 @@ Known incomplete:
 - Not flash-tested on RAK10720.
 - MQTT bridge is intentionally not implemented as a required feature yet.
 - Crow still needs TCP send/response work if it has not already been updated.
+
+### 2026-06-28
+
+Flashability hardening.
+
+Added:
+
+- `scripts/package_nrf52_dfu.py` to create a bootloader-friendly RAK4631/nRF52 DFU package from PlatformIO `firmware.hex`.
+- Build output now includes `RAK_4631_companion_radio_eth-dfu.zip` and generic `firmware.zip`.
+- `docs/FLASHING.md` now explains which file to flash and how to diagnose rejection.
+
+Changed:
+
+- `scripts/build_firmware.sh` now installs/checks `adafruit-nrfutil`, builds, packages DFU zip, and records DFU metadata in `BUILD_INFO.txt`.
+- GitHub Actions now pins Python to `3.11` and installs both `platformio` and `adafruit-nrfutil`.
+
+Reason:
+
+- RAK4631 serial DFU generally will not accept raw `.bin`, `.elf`, or unpackaged `.hex`; the bootloader path needs a DFU `.zip` package.
 
 ## Decision log
 
