@@ -24,6 +24,10 @@
 #define ETH_MAINTAIN_MS 1000UL
 #endif
 
+#ifndef ETH_START_DELAY_MS
+#define ETH_START_DELAY_MS 0UL
+#endif
+
 #ifndef ETH_SPI_SCK
 #define ETH_SPI_SCK 3
 #endif
@@ -52,30 +56,17 @@
 #define ETH_SPI_PORT SPI1
 #endif
 
-/**
- * MeshCore Companion API over RAK13800/W5100S Ethernet.
- *
- * This intentionally mirrors MeshCore's SerialWifiInterface and
- * ArduinoSerialInterface framing:
- *
- *   radio -> client:  '>' + uint16_le(length) + payload
- *   client -> radio:  '<' + uint16_le(length) + payload
- *
- * It is a transport wrapper only. The Companion API command handling
- * remains in examples/companion_radio/MyMesh.cpp.
- */
 class EthernetSerialInterface : public BaseSerialInterface {
   bool deviceConnected;
   bool ethernetReady;
+  bool ethernetStarted;
   bool _isEnabled;
   uint16_t _port;
+  unsigned long beginMillis;
   unsigned long lastDhcpAttempt;
   unsigned long lastMaintain;
 
   EthernetServer *server;
-  // RAK13800's EthernetClient::connected() is not const, but MeshCore's
-  // interface requires isConnected() const. Keep the client mutable so the
-  // transport can report connection state without breaking the interface.
   mutable EthernetClient client;
 
   struct FrameHeader {
@@ -123,6 +114,7 @@ public:
   size_t checkRecvFrame(uint8_t dest[]) override;
 
   bool isEthernetReady() const { return ethernetReady; }
+  bool hasStartedEthernet() const { return ethernetStarted; }
   uint16_t port() const { return _port; }
 };
 
