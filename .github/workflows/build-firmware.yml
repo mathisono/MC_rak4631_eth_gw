@@ -37,10 +37,11 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.x"
+          python-version: "3.11"
+          cache: "pip"
 
-      - name: Install PlatformIO
-        run: python -m pip install --upgrade platformio
+      - name: Install build tools
+        run: python -m pip install --upgrade platformio adafruit-nrfutil
 
       - name: Build firmware
         env:
