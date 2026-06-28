@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 """
-Prepare an upstream MeshCore checkout to build the RAK4631 repeater API target.
+Prepare an upstream MeshCore checkout to build the RAK4631 Companion API target.
 
-This script is intentionally idempotent. It copies this repo's overlay files into
-MeshCore and applies small source/config edits needed for the new build env.
+Primary target now means:
+- MeshCore companion_radio firmware
+- Companion binary app API over BLE
+- Companion binary app API over RAK13800 Ethernet TCP
+- client repeat forced on for repeater-like behavior
+- no MQTT in the default build
 """
 
 from __future__ import annotations
@@ -12,7 +16,7 @@ import argparse
 import shutil
 from pathlib import Path
 
-TARGET_ENV = "RAK_4631_repeater_eth_ble_api"
+TARGET_ENV = "RAK_4631_companion_repeater_eth_ble"
 
 
 def read(path: Path) -> str:
@@ -32,9 +36,9 @@ def replace_once(text: str, old: str, new: str, label: str) -> str:
 
 
 def copy_overlay(overlay: Path, meshcore: Path) -> None:
-    src_dir = overlay / "meshcore_overlay" / "src" / "helpers" / "nrf52"
-    dst_dir = meshcore / "src" / "helpers" / "nrf52"
-    dst_dir.mkdir(parents=True, exist_ok=True)
+    nrf_src = overlay / "meshcore_overlay" / "src" / "helpers" / "nrf52"
+    nrf_dst = meshcore / "src" / "helpers" / "nrf52"
+    nrf_dst.mkdir(parents=True, exist_ok=True)
 
     for name in (
         "BLECommandAPI.h",
@@ -44,119 +48,17 @@ def copy_overlay(overlay: Path, meshcore: Path) -> None:
         "EthernetSerialInterface.h",
         "EthernetSerialInterface.cpp",
     ):
-        shutil.copy2(src_dir / name, dst_dir / name)
+        shutil.copy2(nrf_src / name, nrf_dst / name)
         print(f"copied src/helpers/nrf52/{name}")
 
-
-def patch_simple_repeater_main(meshcore: Path) -> None:
-    path = meshcore / "examples" / "simple_repeater" / "main.cpp"
-    text = read(path)
-
-    include_anchor = """#include <Mesh.h>
-
-#include "MyMesh.h"
-"""
-    include_replacement = """#include <Mesh.h>
-
-#ifdef WITH_ETHERNET_COMMAND_API
-  #include <helpers/nrf52/EthernetCommandAPI.h>
-#endif
-#ifdef WITH_BLE_COMMAND_API
-  #include <helpers/nrf52/BLECommandAPI.h>
-#endif
-
-#include "MyMesh.h"
-"""
-    text = replace_once(text, include_anchor, include_replacement, "simple_repeater API includes")
-
-    global_anchor = """MyMesh the_mesh(board, radio_driver, *new ArduinoMillis(), fast_rng, rtc_clock, tables);
-
-void halt() {
-"""
-    global_replacement = """MyMesh the_mesh(board, radio_driver, *new ArduinoMillis(), fast_rng, rtc_clock, tables);
-
-#ifdef WITH_ETHERNET_COMMAND_API
-EthernetCommandAPI eth_api;
-static char eth_command[160];
-#endif
-#ifdef WITH_BLE_COMMAND_API
-BLECommandAPI ble_api;
-static char ble_command[160];
-#endif
-
-void halt() {
-"""
-    text = replace_once(text, global_anchor, global_replacement, "simple_repeater API globals")
-
-    setup_anchor = """  the_mesh.begin(fs);
-
-#ifdef DISPLAY_CLASS
-"""
-    setup_replacement = """  the_mesh.begin(fs);
-
-#ifdef WITH_ETHERNET_COMMAND_API
-  eth_api.begin(ETH_API_PORT);
-#endif
-#ifdef WITH_BLE_COMMAND_API
-  ble_api.begin(the_mesh.getNodePrefs()->node_name, BLE_API_PIN_CODE);
-#endif
-
-#ifdef DISPLAY_CLASS
-"""
-    text = replace_once(text, setup_anchor, setup_replacement, "simple_repeater API begin")
-
-    loop_anchor = """  if (len > 0 && command[len - 1] == '\\r') {  // received complete line
-    Serial.print('\\n');
-    command[len - 1] = 0;  // replace newline with C string null terminator
-    char reply[160];
-    the_mesh.handleCommand(0, command, reply);  // NOTE: there is no sender_timestamp via serial!
-    if (reply[0]) {
-      Serial.print("  -> "); Serial.println(reply);
-    }
-
-    command[0] = 0;  // reset command buffer
-  }
-
-#if defined(PIN_USER_BTN) && defined(_SEEED_SENSECAP_SOLAR_H_)
-"""
-    loop_replacement = """  if (len > 0 && command[len - 1] == '\\r') {  // received complete line
-    Serial.print('\\n');
-    command[len - 1] = 0;  // replace newline with C string null terminator
-    char reply[160];
-    the_mesh.handleCommand(0, command, reply);  // NOTE: there is no sender_timestamp via serial!
-    if (reply[0]) {
-      Serial.print("  -> "); Serial.println(reply);
-    }
-
-    command[0] = 0;  // reset command buffer
-  }
-
-#ifdef WITH_ETHERNET_COMMAND_API
-  while (eth_api.readCommand(eth_command, sizeof(eth_command))) {
-    char reply[160];
-    the_mesh.handleCommand(0, eth_command, reply);  // Ethernet API has no mesh sender timestamp.
-    eth_api.writeReply(reply);
-  }
-#endif
-#ifdef WITH_BLE_COMMAND_API
-  while (ble_api.readCommand(ble_command, sizeof(ble_command))) {
-    char reply[160];
-    the_mesh.handleCommand(0, ble_command, reply);  // BLE API has no mesh sender timestamp.
-    ble_api.writeReply(reply);
-  }
-  ble_api.loop();
-#endif
-
-#if defined(PIN_USER_BTN) && defined(_SEEED_SENSECAP_SOLAR_H_)
-"""
-    text = replace_once(text, loop_anchor, loop_replacement, "simple_repeater API command loop")
-
-    write(path, text)
-    print("patched examples/simple_repeater/main.cpp")
+    helpers_src = overlay / "meshcore_overlay" / "src" / "helpers"
+    helpers_dst = meshcore / "src" / "helpers"
+    for name in ("DualSerialInterface.h", "DualSerialInterface.cpp"):
+        shutil.copy2(helpers_src / name, helpers_dst / name)
+        print(f"copied src/helpers/{name}")
 
 
 def patch_companion_main(meshcore: Path) -> None:
-    """Keep the older companion Ethernet target buildable, but it is not primary."""
     path = meshcore / "examples" / "companion_radio" / "main.cpp"
     text = read(path)
 
@@ -170,7 +72,14 @@ def patch_companion_main(meshcore: Path) -> None:
   #endif
 """
     new_select = """#elif defined(NRF52_PLATFORM)
-  #ifdef WITH_ETHERNET_TCP_API
+  #ifdef WITH_DUAL_BLE_ETHERNET_COMPANION_API
+    #include <helpers/nrf52/SerialBLEInterface.h>
+    #include <helpers/nrf52/EthernetSerialInterface.h>
+    #include <helpers/DualSerialInterface.h>
+    SerialBLEInterface ble_interface;
+    EthernetSerialInterface eth_interface;
+    DualSerialInterface serial_interface(ble_interface, eth_interface);
+  #elif defined(WITH_ETHERNET_TCP_API)
     #include <helpers/nrf52/EthernetSerialInterface.h>
     EthernetSerialInterface serial_interface;
   #elif defined(BLE_PIN_CODE)
@@ -209,7 +118,10 @@ def patch_companion_main(meshcore: Path) -> None:
     #endif
   );
 
-#ifdef WITH_ETHERNET_TCP_API
+#ifdef WITH_DUAL_BLE_ETHERNET_COMPANION_API
+  ble_interface.begin(BLE_NAME_PREFIX, the_mesh.getNodePrefs()->node_name, the_mesh.getBLEPin());
+  eth_interface.begin(TCP_PORT);
+#elif defined(WITH_ETHERNET_TCP_API)
   serial_interface.begin(TCP_PORT);
 #elif defined(BLE_PIN_CODE)
   serial_interface.begin(BLE_NAME_PREFIX, the_mesh.getNodePrefs()->node_name, the_mesh.getBLEPin());
@@ -225,12 +137,34 @@ def patch_companion_main(meshcore: Path) -> None:
     print("patched examples/companion_radio/main.cpp")
 
 
+def patch_companion_mymesh(meshcore: Path) -> None:
+    path = meshcore / "examples" / "companion_radio" / "MyMesh.cpp"
+    text = read(path)
+
+    anchor = """  _prefs.gps_interval = constrain(_prefs.gps_interval, 0, 86400);  // Max 24 hours
+
+#ifdef BLE_PIN_CODE // 123456 by default
+"""
+    replacement = """  _prefs.gps_interval = constrain(_prefs.gps_interval, 0, 86400);  // Max 24 hours
+
+#ifdef FORCE_CLIENT_REPEAT
+  _prefs.client_repeat = FORCE_CLIENT_REPEAT;
+#endif
+
+#ifdef BLE_PIN_CODE // 123456 by default
+"""
+    text = replace_once(text, anchor, replacement, "FORCE_CLIENT_REPEAT")
+
+    write(path, text)
+    print("patched examples/companion_radio/MyMesh.cpp")
+
+
 def patch_rak4631_variant(meshcore: Path) -> None:
     path = meshcore / "variants" / "rak4631" / "variant.h"
     text = read(path)
 
     old_spi_count = "#define SPI_INTERFACES_COUNT 1"
-    new_spi_count = """#if defined(WITH_ETHERNET_TCP_API) || defined(WITH_ETHERNET_COMMAND_API)
+    new_spi_count = """#if defined(WITH_ETHERNET_TCP_API) || defined(WITH_ETHERNET_COMMAND_API) || defined(WITH_DUAL_BLE_ETHERNET_COMPANION_API)
 // RAK13800/W5100S Ethernet module uses the WisBlock IO-slot SPI bus.
 // RAK4631 LoRa uses a separate SPI bus on pins 43/44/45, so Ethernet
 // must use SPI1 on WB_SPI pins 3/29/30 with CS on 26.
@@ -249,7 +183,7 @@ def patch_rak4631_variant(meshcore: Path) -> None:
 #define PIN_SPI_MOSI (30)
 #define PIN_SPI_SCK (3)
 
-#if defined(WITH_ETHERNET_TCP_API) || defined(WITH_ETHERNET_COMMAND_API)
+#if defined(WITH_ETHERNET_TCP_API) || defined(WITH_ETHERNET_COMMAND_API) || defined(WITH_DUAL_BLE_ETHERNET_COMPANION_API)
 #define PIN_SPI1_MISO (29)
 #define PIN_SPI1_MOSI (30)
 #define PIN_SPI1_SCK  (3)
@@ -297,8 +231,8 @@ def main() -> None:
         raise SystemExit(f"not this overlay repo: {overlay}")
 
     copy_overlay(overlay, meshcore)
-    patch_simple_repeater_main(meshcore)
     patch_companion_main(meshcore)
+    patch_companion_mymesh(meshcore)
     patch_rak4631_variant(meshcore)
     patch_platformio(meshcore, overlay)
     print("MeshCore tree prepared")
