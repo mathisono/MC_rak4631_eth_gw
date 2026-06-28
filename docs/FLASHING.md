@@ -1,9 +1,9 @@
-# Flashing the RAK4631 Ethernet Companion build
+# Flashing the RAK4631 Ethernet Repeater API build
 
 This repo builds a MeshCore nRF52/RAK4631 firmware target:
 
 ```text
-RAK_4631_companion_radio_eth
+RAK_4631_repeater_eth_api
 ```
 
 The expected hardware is a RAK10720 / RAK19007 + RAK4631 + RAK13800 Ethernet module.
@@ -13,14 +13,14 @@ The expected hardware is a RAK10720 / RAK19007 + RAK4631 + RAK13800 Ethernet mod
 After a successful build, artifacts are collected under:
 
 ```text
-dist/RAK_4631_companion_radio_eth/
+dist/RAK_4631_repeater_eth_api/
 ```
 
 Expected files include:
 
 ```text
 firmware.zip
-RAK_4631_companion_radio_eth-dfu.zip
+RAK_4631_repeater_eth_api-dfu.zip
 firmware.hex
 firmware.bin
 firmware.elf
@@ -33,7 +33,7 @@ BUILD_INFO.txt
 For RAK4631 / nRF52 serial DFU, use this file first:
 
 ```text
-dist/RAK_4631_companion_radio_eth/firmware.zip
+dist/RAK_4631_repeater_eth_api/firmware.zip
 ```
 
 `firmware.zip` is a bootloader-friendly DFU package generated from `firmware.hex` using `adafruit-nrfutil dfu genpkg`.
@@ -83,7 +83,7 @@ Then flash:
 
 ```bash
 adafruit-nrfutil --verbose dfu serial \
-  --package dist/RAK_4631_companion_radio_eth/firmware.zip \
+  --package dist/RAK_4631_repeater_eth_api/firmware.zip \
   -p /dev/ttyACM0 \
   -b 115200 \
   --singlebank \
@@ -142,15 +142,29 @@ After flashing:
 2. Power-cycle the RAK10720.
 3. Check your router DHCP leases for the new device.
 4. Test TCP port 4403 from a computer on the same LAN.
+5. Send a repeater command over TCP and confirm a text response.
 ```
 
-Example:
+Port-open test:
 
 ```bash
 nc -vz DEVICE_IP 4403
 ```
 
-A successful TCP connection only proves the Ethernet Companion API server is listening. The next test is a real MeshCore Companion API `DEVICE_QUERY` frame from Crow or a small test client.
+Command-response test:
+
+```bash
+printf 'get name\r' | nc DEVICE_IP 4403
+```
+
+Expected behavior:
+
+```text
+MeshCore repeater Ethernet API ready
+<text response from repeater command handler>
+```
+
+A successful TCP connection only proves the Ethernet command/API server is listening. The command-response test proves the repeater is responding over Ethernet.
 
 ## Recovery notes
 
