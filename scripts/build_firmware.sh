@@ -6,7 +6,7 @@ WORKDIR="${WORKDIR:-$REPO_ROOT/build}"
 MESHCORE_REF="${MESHCORE_REF:-main}"
 MESHCORE_REPO="${MESHCORE_REPO:-https://github.com/meshcore-dev/MeshCore.git}"
 MESHCORE_DIR="${MESHCORE_DIR:-$WORKDIR/MeshCore}"
-TARGET_ENV="${TARGET_ENV:-RAK_4631_companion_radio_eth}"
+TARGET_ENV="${TARGET_ENV:-RAK_4631_repeater_eth_api}"
 DIST_DIR="${DIST_DIR:-$REPO_ROOT/dist/$TARGET_ENV}"
 
 mkdir -p "$WORKDIR" "$DIST_DIR"
