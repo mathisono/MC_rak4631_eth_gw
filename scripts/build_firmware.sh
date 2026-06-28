@@ -6,7 +6,7 @@ WORKDIR="${WORKDIR:-$REPO_ROOT/build}"
 MESHCORE_REF="${MESHCORE_REF:-main}"
 MESHCORE_REPO="${MESHCORE_REPO:-https://github.com/meshcore-dev/MeshCore.git}"
 MESHCORE_DIR="${MESHCORE_DIR:-$WORKDIR/MeshCore}"
-TARGET_ENV="${TARGET_ENV:-RAK_4631_repeater_eth_ble_api}"
+TARGET_ENV="${TARGET_ENV:-RAK_4631_companion_repeater_eth_ble}"
 DIST_DIR="${DIST_DIR:-$REPO_ROOT/dist/$TARGET_ENV}"
 
 mkdir -p "$WORKDIR" "$DIST_DIR"
@@ -51,13 +51,10 @@ if [ ! -d "$BUILD_DIR" ]; then
   exit 1
 fi
 
-# Keep the common PlatformIO / nRF52 outputs. Some envs emit only a subset.
 find "$BUILD_DIR" -maxdepth 1 -type f \
   \( -name 'firmware.*' -o -name '*.uf2' -o -name '*.zip' -o -name '*.hex' -o -name '*.bin' -o -name '*.elf' -o -name '*.map' \) \
   -exec cp -v {} "$DIST_DIR/" \;
 
-# Make an explicit bootloader-friendly DFU zip for RAK4631/nRF52.
-# This is the artifact to try first when the device rejects raw build output.
 DFU_ZIP="$DIST_DIR/${TARGET_ENV}-dfu.zip"
 python3 "$REPO_ROOT/scripts/package_nrf52_dfu.py" \
   --meshcore "$MESHCORE_DIR" \
@@ -65,10 +62,8 @@ python3 "$REPO_ROOT/scripts/package_nrf52_dfu.py" \
   --out "$DFU_ZIP" \
   --target-env "$TARGET_ENV"
 
-# Backward-compatible generic name for tools/docs that expect firmware.zip.
 cp -v "$DFU_ZIP" "$DIST_DIR/firmware.zip"
 
-# Record enough context to reproduce the artifact.
 {
   echo "target_env=$TARGET_ENV"
   echo "meshcore_repo=$MESHCORE_REPO"
