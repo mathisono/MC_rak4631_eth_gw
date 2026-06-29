@@ -411,6 +411,8 @@ size_t EthernetSerialInterface::checkRecvFrame(uint8_t dest[]) {
   // Flush queued outbound frames first so app responses do not stall behind RX parsing.
   if (send_queue_len > 0) {
     const uint16_t len = send_queue[0].len;
+    const uint8_t hdrType = send_queue[0].len > 0 ? send_queue[0].buf[0] : 0;
+    ETH_DEBUG_PRINTLN("TCP tx frame len=%u hdr=%u", (unsigned)len, (unsigned)hdrType);
     uint8_t hdr[3];
     hdr[0] = '>';
     hdr[1] = len & 0xFF;
@@ -465,7 +467,9 @@ size_t EthernetSerialInterface::checkRecvFrame(uint8_t dest[]) {
     return 0;
   }
 
+  ETH_DEBUG_PRINTLN("TCP rx bytes=%d", client.available());
   client.readBytes(dest, frameLength);
+  ETH_DEBUG_PRINTLN("TCP rx frame len=%d cmd=%d", frameLength, dest[0]);
   resetReceivedFrameHeader();
   return frameLength;
 }
