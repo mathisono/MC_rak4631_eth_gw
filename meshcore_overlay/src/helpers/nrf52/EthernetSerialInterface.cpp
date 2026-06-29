@@ -191,20 +191,15 @@ bool EthernetSerialInterface::startEthernet() {
   makeMac(mac);
   ETH_DEBUG_PRINTLN("MAC %02X:%02X:%02X:%02X:%02X:%02X", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 
-  ETH_DEBUG_PRINTLN("Ethernet.hardwareStatus() before DHCP");
-#if ETH_CHECK_LINK_STATUS
-  ETH_DEBUG_PRINTLN("Ethernet.linkStatus() before DHCP");
-  EthernetStatusLogger<decltype(Ethernet)>::logBeforeDhcp(Ethernet);
-#else
-  ETH_DEBUG_PRINTLN("hardware/link status checks disabled");
-#endif
-
 #if ETH_USE_STATIC_IP
   ETH_DEBUG_PRINTLN("static IP mode");
   IPAddress ip(ETH_STATIC_IP_A, ETH_STATIC_IP_B, ETH_STATIC_IP_C, ETH_STATIC_IP_D);
   IPAddress dns(ETH_DNS_A, ETH_DNS_B, ETH_DNS_C, ETH_DNS_D);
   IPAddress gateway(ETH_GATEWAY_A, ETH_GATEWAY_B, ETH_GATEWAY_C, ETH_GATEWAY_D);
   IPAddress subnet(ETH_SUBNET_A, ETH_SUBNET_B, ETH_SUBNET_C, ETH_SUBNET_D);
+#if ETH_PING_ONLY
+  ETH_DEBUG_PRINTLN("ping-only mode");
+#endif
   ETH_DEBUG_PRINTLN("Ethernet.begin(mac, ip, dns, gateway, subnet) start");
   Ethernet.begin(mac, ip, dns, gateway, subnet);
   int status = 1;
@@ -223,7 +218,16 @@ bool EthernetSerialInterface::startEthernet() {
   if (status == 0) {
     ethernetReady = false;
     lastDhcpAttempt = millis();
+#if !ETH_PING_ONLY
+    ETH_DEBUG_PRINTLN("Ethernet.begin failed");
+    ETH_DEBUG_PRINTLN("hardwareStatus=%d", (int)Ethernet.hardwareStatus());
+#if ETH_CHECK_LINK_STATUS
+    ETH_DEBUG_PRINTLN("linkStatus=%d", (int)Ethernet.linkStatus());
+#endif
     EthernetStatusLogger<decltype(Ethernet)>::logFailure(Ethernet);
+#else
+    ETH_DEBUG_PRINTLN("Ethernet.begin failed in ping-only mode");
+#endif
     return false;
   }
 
@@ -248,16 +252,17 @@ void EthernetSerialInterface::begin(int port) {
 
 #if ETH_START_DELAY_MS == 0
   if (!startEthernet()) {
-    // Leave server unset until DHCP succeeds during serviceEthernet().
     return;
   }
 
+#if !ETH_PING_ONLY
   if (server) {
     delete server;
   }
   server = new EthernetServer(_port);
   server->begin();
   ETH_DEBUG_PRINTLN("TCP companion server listening on %d", _port);
+#endif
 #else
   ETH_DEBUG_PRINTLN("Ethernet startup delayed by %lu ms", (unsigned long)ETH_START_DELAY_MS);
 #endif
@@ -305,24 +310,32 @@ void EthernetSerialInterface::serviceEthernet() {
       ETH_DEBUG_PRINTLN("delay expired");
     }
 #endif
-    if (now - lastDhcpAttempt >= ETH_DHCP_RETRY_MS) {
+    if (!ethernetStarted && now - lastDhcpAttempt >= ETH_DHCP_RETRY_MS) {
+      ethernetStarted = true;
       if (startEthernet()) {
+#if !ETH_PING_ONLY
         if (!server) {
           server = new EthernetServer(_port);
         }
         server->begin();
         ETH_DEBUG_PRINTLN("TCP companion server listening on %d", _port);
+#else
+        ETH_DEBUG_PRINTLN("ping-only Ethernet ready");
+#endif
+      } else {
+        ethernetStarted = false;
       }
     }
     return;
   }
 
-  if (now - lastMaintain >= ETH_MAINTAIN_MS) {
+  if (!ETH_DISABLE_MAINTAIN && now - lastMaintain >= ETH_MAINTAIN_MS) {
     Ethernet.maintain();
     lastMaintain = now;
   }
 
 #if ETH_CHECK_LINK_STATUS
+#if !ETH_PING_ONLY
   EthernetStatusLogger<decltype(Ethernet)>::logRunning(Ethernet);
   if (EthernetStatusLogger<decltype(Ethernet)>::isDown(Ethernet)) {
     ethernetReady = false;
@@ -330,9 +343,14 @@ void EthernetSerialInterface::serviceEthernet() {
     lastDhcpAttempt = now;
   }
 #endif
+#endif
 }
 
 void EthernetSerialInterface::serviceClient() {
+#if ETH_PING_ONLY
+  (void)this;
+  return;
+#else
   if (!server || !ethernetReady) return;
 
   EthernetClient newClient = server->available();
@@ -347,6 +365,7 @@ void EthernetSerialInterface::serviceClient() {
   if (deviceConnected && !client.connected()) {
     dropClient();
   }
+#endif
 }
 
 size_t EthernetSerialInterface::writeFrame(const uint8_t src[], size_t len) {
@@ -382,6 +401,7 @@ size_t EthernetSerialInterface::checkRecvFrame(uint8_t dest[]) {
   if (!_isEnabled) return 0;
 
   serviceEthernet();
+#if !ETH_PING_ONLY
   serviceClient();
 
   if (!deviceConnected) return 0;
@@ -446,6 +466,10 @@ size_t EthernetSerialInterface::checkRecvFrame(uint8_t dest[]) {
   client.readBytes(dest, frameLength);
   resetReceivedFrameHeader();
   return frameLength;
+#else
+  (void)dest;
+  return 0;
+#endif
 }
 
 #endif // WITH_ETHERNET_TCP_API

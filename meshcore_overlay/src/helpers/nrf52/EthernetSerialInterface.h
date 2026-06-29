@@ -32,6 +32,18 @@
 #define ETH_USE_STATIC_IP 0
 #endif
 
+#ifndef ETH_PING_ONLY
+#define ETH_PING_ONLY 0
+#endif
+
+#ifndef ETH_DISABLE_MAINTAIN
+#define ETH_DISABLE_MAINTAIN 0
+#endif
+
+#ifndef ETH_NO_REINIT_AFTER_SUCCESS
+#define ETH_NO_REINIT_AFTER_SUCCESS 0
+#endif
+
 #ifndef ETH_STATIC_IP_A
 #define ETH_STATIC_IP_A 0
 #endif
