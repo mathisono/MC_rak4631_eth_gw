@@ -198,9 +198,27 @@ bool EthernetSerialInterface::startEthernet() {
 #else
   ETH_DEBUG_PRINTLN("hardware/link status checks disabled");
 #endif
+
+#if ETH_USE_STATIC_IP
+  ETH_DEBUG_PRINTLN("static IP mode");
+  IPAddress ip(ETH_STATIC_IP_A, ETH_STATIC_IP_B, ETH_STATIC_IP_C, ETH_STATIC_IP_D);
+  IPAddress dns(ETH_DNS_A, ETH_DNS_B, ETH_DNS_C, ETH_DNS_D);
+  IPAddress gateway(ETH_GATEWAY_A, ETH_GATEWAY_B, ETH_GATEWAY_C, ETH_GATEWAY_D);
+  IPAddress subnet(ETH_SUBNET_A, ETH_SUBNET_B, ETH_SUBNET_C, ETH_SUBNET_D);
+  ETH_DEBUG_PRINTLN("Ethernet.begin(mac, ip, dns, gateway, subnet) start");
+  Ethernet.begin(mac, ip, dns, gateway, subnet);
+  int status = 1;
+  ETH_DEBUG_PRINTLN("Ethernet.begin(mac, ip, dns, gateway, subnet) return status=%d", status);
+#else
+  ETH_DEBUG_PRINTLN("DHCP mode");
+  ETH_DEBUG_PRINTLN("Ethernet.setRetransmissionTimeout(200)");
+  Ethernet.setRetransmissionTimeout(200);
+  ETH_DEBUG_PRINTLN("Ethernet.setRetransmissionCount(2)");
+  Ethernet.setRetransmissionCount(2);
   ETH_DEBUG_PRINTLN("Ethernet.begin(mac) start");
   int status = Ethernet.begin(mac);
   ETH_DEBUG_PRINTLN("Ethernet.begin(mac) return status=%d", status);
+#endif
 
   if (status == 0) {
     ethernetReady = false;

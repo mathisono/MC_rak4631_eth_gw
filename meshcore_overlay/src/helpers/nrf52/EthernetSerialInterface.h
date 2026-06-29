@@ -28,6 +28,62 @@
 #define ETH_START_DELAY_MS 0UL
 #endif
 
+#ifndef ETH_USE_STATIC_IP
+#define ETH_USE_STATIC_IP 0
+#endif
+
+#ifndef ETH_STATIC_IP_A
+#define ETH_STATIC_IP_A 0
+#endif
+#ifndef ETH_STATIC_IP_B
+#define ETH_STATIC_IP_B 0
+#endif
+#ifndef ETH_STATIC_IP_C
+#define ETH_STATIC_IP_C 0
+#endif
+#ifndef ETH_STATIC_IP_D
+#define ETH_STATIC_IP_D 0
+#endif
+
+#ifndef ETH_GATEWAY_A
+#define ETH_GATEWAY_A 0
+#endif
+#ifndef ETH_GATEWAY_B
+#define ETH_GATEWAY_B 0
+#endif
+#ifndef ETH_GATEWAY_C
+#define ETH_GATEWAY_C 0
+#endif
+#ifndef ETH_GATEWAY_D
+#define ETH_GATEWAY_D 0
+#endif
+
+#ifndef ETH_SUBNET_A
+#define ETH_SUBNET_A 0
+#endif
+#ifndef ETH_SUBNET_B
+#define ETH_SUBNET_B 0
+#endif
+#ifndef ETH_SUBNET_C
+#define ETH_SUBNET_C 0
+#endif
+#ifndef ETH_SUBNET_D
+#define ETH_SUBNET_D 0
+#endif
+
+#ifndef ETH_DNS_A
+#define ETH_DNS_A 0
+#endif
+#ifndef ETH_DNS_B
+#define ETH_DNS_B 0
+#endif
+#ifndef ETH_DNS_C
+#define ETH_DNS_C 0
+#endif
+#ifndef ETH_DNS_D
+#define ETH_DNS_D 0
+#endif
+
 #ifndef ETH_SPI_SCK
 #define ETH_SPI_SCK 3
 #endif
