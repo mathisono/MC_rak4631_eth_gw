@@ -161,6 +161,7 @@ class EthernetSerialInterface : public BaseSerialInterface {
   // interface requires isConnected() const. Keep the client mutable so the
   // transport can report connection state without breaking the interface.
   mutable EthernetClient client;
+  mutable EthernetClient pendingClient;
 
   struct FrameHeader {
     uint8_t type;
@@ -173,16 +174,24 @@ class EthernetSerialInterface : public BaseSerialInterface {
   };
 
   FrameHeader received_frame_header;
+  FrameHeader pending_received_frame_header;
 
   int recv_queue_len;
   Frame recv_queue[ETH_FRAME_QUEUE_SIZE];
   int send_queue_len;
   Frame send_queue[ETH_FRAME_QUEUE_SIZE];
   unsigned long lastDelayLog;
+  unsigned long pendingClientSince;
+  bool pendingClientValid;
+  bool pendingFrameBuffered;
+  bool pendingFrameDeliverable;
+  Frame pendingFrame;
 
   void clearBuffers();
   void resetReceivedFrameHeader();
+  void resetPendingReceivedFrameHeader();
   bool hasReceivedFrameHeader() const;
+  bool hasPendingReceivedFrameHeader() const;
   void makeMac(uint8_t mac[6]);
   void powerUpEthernet();
   void resetEthernet();
@@ -190,6 +199,8 @@ class EthernetSerialInterface : public BaseSerialInterface {
   void serviceEthernet();
   void serviceClient();
   void dropClient();
+  void clearPendingClient();
+  void promotePendingClientToActive();
 
 public:
   EthernetSerialInterface();

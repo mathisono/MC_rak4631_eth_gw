@@ -102,10 +102,14 @@ struct EthernetStatusLogger<EthernetT, false> {
 EthernetSerialInterface::EthernetSerialInterface()
     : deviceConnected(false), ethernetReady(false), _isEnabled(false), _port(TCP_PORT),
       lastDhcpAttempt(0), lastMaintain(0), lastServiceLog(0), lastClientLog(0), lastDelayLog(0),
-      server(nullptr), client(EthernetClient()) {
+      server(nullptr), client(EthernetClient()), pendingClient(EthernetClient()), pendingClientSince(0),
+      pendingClientValid(false), pendingFrameBuffered(false), pendingFrameDeliverable(false) {
   send_queue_len = recv_queue_len = 0;
   received_frame_header.type = 0;
   received_frame_header.length = 0;
+  pending_received_frame_header.type = 0;
+  pending_received_frame_header.length = 0;
+  pendingFrame.len = 0;
 }
 
 EthernetSerialInterface::~EthernetSerialInterface() {
@@ -127,6 +131,15 @@ bool EthernetSerialInterface::hasReceivedFrameHeader() const {
 void EthernetSerialInterface::resetReceivedFrameHeader() {
   received_frame_header.type = 0;
   received_frame_header.length = 0;
+}
+
+void EthernetSerialInterface::resetPendingReceivedFrameHeader() {
+  pending_received_frame_header.type = 0;
+  pending_received_frame_header.length = 0;
+}
+
+bool EthernetSerialInterface::hasPendingReceivedFrameHeader() const {
+  return pending_received_frame_header.type != 0 && pending_received_frame_header.length != 0;
 }
 
 void EthernetSerialInterface::makeMac(uint8_t mac[6]) {
@@ -305,6 +318,31 @@ void EthernetSerialInterface::dropClient() {
   resetReceivedFrameHeader();
 }
 
+void EthernetSerialInterface::clearPendingClient() {
+  pendingClientValid = false;
+  pendingClientSince = 0;
+  pendingFrameBuffered = false;
+  pendingFrameDeliverable = false;
+  pendingFrame.len = 0;
+  resetPendingReceivedFrameHeader();
+  pendingClient = EthernetClient();
+}
+
+void EthernetSerialInterface::promotePendingClientToActive() {
+  if (!pendingClientValid) return;
+
+  if (deviceConnected && client && client.connected()) {
+    client.stop();
+  }
+
+  client = pendingClient;
+  deviceConnected = true;
+  resetReceivedFrameHeader();
+  pendingClientValid = false;
+  pendingClientSince = 0;
+  pendingClient = EthernetClient();
+}
+
 void EthernetSerialInterface::serviceEthernet() {
   unsigned long now = millis();
 
@@ -343,7 +381,17 @@ void EthernetSerialInterface::serviceClient() {
   EthernetClient newClient = server->available();
   if (newClient) {
     if (deviceConnected && client && client.connected()) {
-      ETH_DEBUG_PRINTLN("rejecting extra TCP client, active client already connected");
+      if (pendingClientValid) {
+        ETH_DEBUG_PRINTLN("rejecting extra TCP client, pending already exists");
+        newClient.stop();
+      } else {
+        pendingClient = newClient;
+        pendingClientValid = true;
+        pendingClientSince = millis();
+        ETH_DEBUG_PRINTLN("TCP pending client connected");
+      }
+    } else if (pendingClientValid) {
+      ETH_DEBUG_PRINTLN("rejecting extra TCP client, pending already exists");
       newClient.stop();
     } else {
       client = newClient;
@@ -353,8 +401,55 @@ void EthernetSerialInterface::serviceClient() {
     }
   }
 
+  if (pendingClientValid) {
+    unsigned long now = millis();
+    if (!pendingClient.connected()) {
+      clearPendingClient();
+    } else if (!pendingFrameBuffered) {
+      if (now - pendingClientSince > 5000UL) {
+        ETH_DEBUG_PRINTLN("pending TCP client timeout");
+        pendingClient.stop();
+        clearPendingClient();
+      } else {
+        if (!hasPendingReceivedFrameHeader()) {
+          if (pendingClient.available() >= 3) {
+            pendingClient.readBytes(&pending_received_frame_header.type, 1);
+            pendingClient.readBytes((uint8_t *)&pending_received_frame_header.length, 2);
+          }
+        }
+
+        if (hasPendingReceivedFrameHeader()) {
+          int frameType = pending_received_frame_header.type;
+          int frameLength = pending_received_frame_header.length;
+          if (frameType == '<' && frameLength > 0 && frameLength <= MAX_FRAME_SIZE &&
+              pendingClient.available() >= frameLength) {
+            pendingClient.readBytes(pendingFrame.buf, frameLength);
+            pendingFrame.len = frameLength;
+            pendingFrameBuffered = true;
+            resetPendingReceivedFrameHeader();
+            int cmd = pendingFrame.buf[0];
+            if (cmd == 1 || cmd == 22) {
+              ETH_DEBUG_PRINTLN("pending client sent startup command, switching active client");
+              promotePendingClientToActive();
+              pendingFrameDeliverable = true;
+              ETH_DEBUG_PRINTLN("TCP client connected");
+            }
+          }
+        }
+      }
+    }
+  }
+
   if (deviceConnected && !client.connected()) {
-    dropClient();
+    if (pendingClientValid) {
+      promotePendingClientToActive();
+      ETH_DEBUG_PRINTLN("promoted pending TCP client to active");
+      if (pendingFrameBuffered) {
+        pendingFrameDeliverable = true;
+      }
+    } else {
+      dropClient();
+    }
   }
 }
 
@@ -392,6 +487,15 @@ size_t EthernetSerialInterface::checkRecvFrame(uint8_t dest[]) {
 
   serviceEthernet();
   serviceClient();
+
+  if (pendingFrameDeliverable) {
+    size_t len = pendingFrame.len;
+    memcpy(dest, pendingFrame.buf, len);
+    pendingFrameDeliverable = false;
+    pendingFrameBuffered = false;
+    pendingFrame.len = 0;
+    return len;
+  }
 
   if (!deviceConnected) return 0;
 
