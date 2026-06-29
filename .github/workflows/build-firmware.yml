@@ -42,16 +42,42 @@ jobs:
       - name: Install PlatformIO
         run: python -m pip install --upgrade platformio
 
+      - name: Resolve target env
+        id: vars
+        shell: bash
+        run: |
+          TARGET_ENV="${{ github.event.inputs.target_env }}"
+          if [ -z "$TARGET_ENV" ]; then
+            case "$GITHUB_REF_NAME" in
+              v0.1.8-eth-pingonly)
+                TARGET_ENV="RAK_4631_companion_repeater_eth_ble_pingonly"
+                ;;
+              v0.1.6-static-eth-debug)
+                TARGET_ENV="RAK_4631_companion_repeater_eth_ble_staticdebug"
+                ;;
+              v0.1.5-dual-poll-eth-debug|v0.1.4-eth-debug)
+                TARGET_ENV="RAK_4631_companion_repeater_eth_ble_ethdebug"
+                ;;
+              v0.1.2-ble-debug)
+                TARGET_ENV="RAK_4631_companion_ble_overlay_debug"
+                ;;
+              *)
+                TARGET_ENV="RAK_4631_companion_repeater_eth_ble"
+                ;;
+            esac
+          fi
+          echo "target_env=$TARGET_ENV" >> "$GITHUB_OUTPUT"
+
       - name: Build firmware
         env:
           MESHCORE_REF: ${{ github.event.inputs.meshcore_ref || 'main' }}
-          TARGET_ENV: ${{ github.event.inputs.target_env || (github.ref_name == 'v0.1.8-eth-pingonly' && 'RAK_4631_companion_repeater_eth_ble_pingonly' || (github.ref_name == 'v0.1.6-static-eth-debug' && 'RAK_4631_companion_repeater_eth_ble_staticdebug' || ((github.ref_name == 'v0.1.5-dual-poll-eth-debug' || github.ref_name == 'v0.1.4-eth-debug') && 'RAK_4631_companion_repeater_eth_ble_ethdebug' || (github.ref_name == 'v0.1.2-ble-debug' && 'RAK_4631_companion_ble_overlay_debug' || 'RAK_4631_companion_repeater_eth_ble'))) }}
+          TARGET_ENV: ${{ steps.vars.outputs.target_env }}
         run: bash scripts/build_firmware.sh
 
       - name: Upload firmware artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ github.event.inputs.target_env || (github.ref_name == 'v0.1.8-eth-pingonly' && 'RAK_4631_companion_repeater_eth_ble_pingonly' || (github.ref_name == 'v0.1.6-static-eth-debug' && 'RAK_4631_companion_repeater_eth_ble_staticdebug' || ((github.ref_name == 'v0.1.5-dual-poll-eth-debug' || github.ref_name == 'v0.1.4-eth-debug') && 'RAK_4631_companion_repeater_eth_ble_ethdebug' || (github.ref_name == 'v0.1.2-ble-debug' && 'RAK_4631_companion_ble_overlay_debug' || 'RAK_4631_companion_repeater_eth_ble'))) }}
+          name: ${{ steps.vars.outputs.target_env }}
           path: dist/**
           if-no-files-found: error
 
