@@ -5,8 +5,14 @@
 #include "SerialBLEInterface.h"
 
 class CompanionDualSerialInterface : public BaseSerialInterface {
+  enum class Transport : uint8_t {
+    Ble,
+    Ethernet,
+  };
+
   struct Frame {
     uint8_t len;
+    Transport source;
     uint8_t buf[MAX_FRAME_SIZE];
   };
 
@@ -14,12 +20,14 @@ class CompanionDualSerialInterface : public BaseSerialInterface {
 
   SerialBLEInterface ble;
   EthernetSerialInterface ethernet;
+  Transport active_transport;
   uint8_t recv_queue_len;
   Frame recv_queue[RECV_QUEUE_CAPACITY];
 
   void clearRecvQueue();
-  void enqueueRecvFrame(const uint8_t src[], size_t len);
+  void enqueueRecvFrame(Transport source, const uint8_t src[], size_t len);
   size_t dequeueRecvFrame(uint8_t dest[]);
+  size_t dequeueRecvFrameFromSource(Transport source, uint8_t dest[]);
 
 public:
   CompanionDualSerialInterface();
