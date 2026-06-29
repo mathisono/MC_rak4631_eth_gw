@@ -52,6 +52,9 @@ jobs:
               v0.2.0-companion-radio-eth)
                 TARGET_ENV="RAK_4631_companion_radio_eth"
                 ;;
+              v0.2.3-companion-eth-client-handoff)
+                TARGET_ENV="RAK_4631_companion_radio_eth_clean"
+                ;;
               v0.2.2-companion-eth-single-client)
                 TARGET_ENV="RAK_4631_companion_radio_eth_clean"
                 ;;
