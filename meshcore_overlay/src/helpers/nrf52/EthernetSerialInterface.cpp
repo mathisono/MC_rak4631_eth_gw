@@ -101,7 +101,8 @@ struct EthernetStatusLogger<EthernetT, false> {
 
 EthernetSerialInterface::EthernetSerialInterface()
     : deviceConnected(false), ethernetReady(false), _isEnabled(false), _port(TCP_PORT),
-      lastDhcpAttempt(0), lastMaintain(0), lastDelayLog(0), server(nullptr), client(EthernetClient()) {
+      lastDhcpAttempt(0), lastMaintain(0), lastServiceLog(0), lastClientLog(0), lastDelayLog(0),
+      server(nullptr), client(EthernetClient()) {
   send_queue_len = recv_queue_len = 0;
   received_frame_header.type = 0;
   received_frame_header.length = 0;
@@ -197,13 +198,33 @@ bool EthernetSerialInterface::startEthernet() {
   IPAddress dns(ETH_DNS_A, ETH_DNS_B, ETH_DNS_C, ETH_DNS_D);
   IPAddress gateway(ETH_GATEWAY_A, ETH_GATEWAY_B, ETH_GATEWAY_C, ETH_GATEWAY_D);
   IPAddress subnet(ETH_SUBNET_A, ETH_SUBNET_B, ETH_SUBNET_C, ETH_SUBNET_D);
-#if ETH_PING_ONLY
-  ETH_DEBUG_PRINTLN("ping-only mode");
-#endif
   ETH_DEBUG_PRINTLN("Ethernet.begin(mac, ip, dns, gateway, subnet) start");
   Ethernet.begin(mac, ip, dns, gateway, subnet);
   int status = 1;
   ETH_DEBUG_PRINTLN("Ethernet.begin(mac, ip, dns, gateway, subnet) return status=%d", status);
+#if ETH_PING_ONLY
+  ETH_DEBUG_PRINTLN("ping-only mode");
+#endif
+  ethernetReady = true;
+  ethernetStarted = true;
+  if (!server) {
+    ETH_DEBUG_PRINTLN("server begin on %d", _port);
+    server = new EthernetServer(_port);
+  } else {
+    ETH_DEBUG_PRINTLN("server begin on %d", _port);
+  }
+  server->begin();
+  ETH_DEBUG_PRINTLN("TCP companion server listening on %d", _port);
+  ETH_DEBUG_PRINTLN("static IP %u.%u.%u.%u", Ethernet.localIP()[0], Ethernet.localIP()[1], Ethernet.localIP()[2], Ethernet.localIP()[3]);
+  ETH_DEBUG_PRINTLN("localIP %u.%u.%u.%u", Ethernet.localIP()[0], Ethernet.localIP()[1], Ethernet.localIP()[2], Ethernet.localIP()[3]);
+  ETH_DEBUG_PRINTLN("subnet %u.%u.%u.%u", Ethernet.subnetMask()[0], Ethernet.subnetMask()[1], Ethernet.subnetMask()[2], Ethernet.subnetMask()[3]);
+  ETH_DEBUG_PRINTLN("gateway %u.%u.%u.%u", Ethernet.gatewayIP()[0], Ethernet.gatewayIP()[1], Ethernet.gatewayIP()[2], Ethernet.gatewayIP()[3]);
+  ETH_DEBUG_PRINTLN("dns %u.%u.%u.%u", Ethernet.dnsServerIP()[0], Ethernet.dnsServerIP()[1], Ethernet.dnsServerIP()[2], Ethernet.dnsServerIP()[3]);
+  lastClientLog = millis();
+  return true;
+#elif ETH_DISABLE_DHCP
+  ETH_DEBUG_PRINTLN("DHCP disabled");
+  return false;
 #else
   ETH_DEBUG_PRINTLN("DHCP mode");
   ETH_DEBUG_PRINTLN("Ethernet.setRetransmissionTimeout(200)");
@@ -246,6 +267,8 @@ void EthernetSerialInterface::begin(int port) {
   beginMillis = millis();
   lastDhcpAttempt = beginMillis;
   lastMaintain = beginMillis;
+  lastServiceLog = beginMillis;
+  lastClientLog = beginMillis;
   lastDelayLog = beginMillis;
   ethernetReady = false;
   ethernetStarted = false;
@@ -254,15 +277,6 @@ void EthernetSerialInterface::begin(int port) {
   if (!startEthernet()) {
     return;
   }
-
-#if !ETH_PING_ONLY
-  if (server) {
-    delete server;
-  }
-  server = new EthernetServer(_port);
-  server->begin();
-  ETH_DEBUG_PRINTLN("TCP companion server listening on %d", _port);
-#endif
 #else
   ETH_DEBUG_PRINTLN("Ethernet startup delayed by %lu ms", (unsigned long)ETH_START_DELAY_MS);
 #endif
@@ -282,7 +296,7 @@ void EthernetSerialInterface::disable() {
 
 void EthernetSerialInterface::dropClient() {
   if (deviceConnected) {
-    ETH_DEBUG_PRINTLN("client disconnected");
+    ETH_DEBUG_PRINTLN("TCP client disconnected");
   }
   deviceConnected = false;
   if (client) {
@@ -292,80 +306,67 @@ void EthernetSerialInterface::dropClient() {
 }
 
 void EthernetSerialInterface::serviceEthernet() {
-  ETH_DEBUG_PRINTLN("entering serviceEthernet()");
   unsigned long now = millis();
 
-  if (!ethernetReady) {
-#if ETH_START_DELAY_MS > 0
-    if (!ethernetStarted) {
-      unsigned long elapsed = now - beginMillis;
-      if (elapsed < ETH_START_DELAY_MS) {
-        if (now - lastDelayLog >= 1000UL) {
-          lastDelayLog = now;
-          ETH_DEBUG_PRINTLN("delay countdown: %lu ms remaining",
-                            (unsigned long)(ETH_START_DELAY_MS - elapsed));
-        }
-        return;
-      }
-      ETH_DEBUG_PRINTLN("delay expired");
-    }
-#endif
-    if (!ethernetStarted && now - lastDhcpAttempt >= ETH_DHCP_RETRY_MS) {
-      ethernetStarted = true;
-      if (startEthernet()) {
-#if !ETH_PING_ONLY
-        if (!server) {
-          server = new EthernetServer(_port);
-        }
-        server->begin();
-        ETH_DEBUG_PRINTLN("TCP companion server listening on %d", _port);
-#else
-        ETH_DEBUG_PRINTLN("ping-only Ethernet ready");
-#endif
-      } else {
-        ethernetStarted = false;
-      }
-    }
+  if (lastServiceLog == 0 || now - lastServiceLog >= 5000UL) {
+    lastServiceLog = now;
+    ETH_DEBUG_PRINTLN("entering serviceEthernet()");
+  }
+
+  if (ethernetReady) {
     return;
   }
 
-  if (!ETH_DISABLE_MAINTAIN && now - lastMaintain >= ETH_MAINTAIN_MS) {
-    Ethernet.maintain();
-    lastMaintain = now;
+#if ETH_START_DELAY_MS > 0
+  if (!ethernetStarted) {
+    unsigned long elapsed = now - beginMillis;
+    if (elapsed < ETH_START_DELAY_MS) {
+      if (now - lastDelayLog >= 1000UL) {
+        lastDelayLog = now;
+        ETH_DEBUG_PRINTLN("delay countdown: %lu ms remaining",
+                          (unsigned long)(ETH_START_DELAY_MS - elapsed));
+      }
+      return;
+    }
+    ETH_DEBUG_PRINTLN("delay expired");
+    ethernetStarted = true;
+  }
+#endif
+  if (now - lastDhcpAttempt < ETH_DHCP_RETRY_MS) {
+    return;
   }
 
-#if ETH_CHECK_LINK_STATUS
-#if !ETH_PING_ONLY
-  EthernetStatusLogger<decltype(Ethernet)>::logRunning(Ethernet);
-  if (EthernetStatusLogger<decltype(Ethernet)>::isDown(Ethernet)) {
-    ethernetReady = false;
-    dropClient();
-    lastDhcpAttempt = now;
+  lastDhcpAttempt = now;
+  if (!startEthernet()) {
+    ETH_DEBUG_PRINTLN("startEthernet() failed; will retry");
   }
-#endif
-#endif
 }
 
 void EthernetSerialInterface::serviceClient() {
-#if ETH_PING_ONLY
-  (void)this;
-  return;
-#else
+#if ETH_TCP_SERVER_DEBUG
+  unsigned long now = millis();
+  if (lastClientLog == 0 || now - lastClientLog >= 5000UL) {
+    lastClientLog = now;
+    ETH_DEBUG_PRINTLN("serviceClient server=%d ready=%d", server ? 1 : 0, ethernetReady ? 1 : 0);
+  }
+#endif
+
   if (!server || !ethernetReady) return;
 
   EthernetClient newClient = server->available();
   if (newClient) {
-    dropClient();
+    if (deviceConnected && client) {
+      client.stop();
+    }
     client = newClient;
     deviceConnected = true;
     resetReceivedFrameHeader();
-    ETH_DEBUG_PRINTLN("client connected");
+    ETH_DEBUG_PRINTLN("TCP client connected");
   }
 
   if (deviceConnected && !client.connected()) {
     dropClient();
   }
-#endif
 }
 
 size_t EthernetSerialInterface::writeFrame(const uint8_t src[], size_t len) {
@@ -401,8 +402,9 @@ size_t EthernetSerialInterface::checkRecvFrame(uint8_t dest[]) {
   if (!_isEnabled) return 0;
 
   serviceEthernet();
-#if !ETH_PING_ONLY
+  ETH_DEBUG_PRINTLN("after serviceEthernet");
   serviceClient();
+  ETH_DEBUG_PRINTLN("after serviceClient");
 
   if (!deviceConnected) return 0;
 
@@ -466,10 +468,6 @@ size_t EthernetSerialInterface::checkRecvFrame(uint8_t dest[]) {
   client.readBytes(dest, frameLength);
   resetReceivedFrameHeader();
   return frameLength;
-#else
-  (void)dest;
-  return 0;
-#endif
 }
 
 #endif // WITH_ETHERNET_TCP_API

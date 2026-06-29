@@ -49,6 +49,9 @@ jobs:
           TARGET_ENV="${{ github.event.inputs.target_env }}"
           if [ -z "$TARGET_ENV" ]; then
             case "$GITHUB_REF_NAME" in
+              v0.1.11-static-tcp-stable)
+                TARGET_ENV="RAK_4631_companion_repeater_eth_ble_tcpstable"
+                ;;
               v0.1.8-eth-pingonly)
                 TARGET_ENV="RAK_4631_companion_repeater_eth_ble_pingonly"
                 ;;

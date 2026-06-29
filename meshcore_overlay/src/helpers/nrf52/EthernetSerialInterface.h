@@ -32,6 +32,10 @@
 #define ETH_USE_STATIC_IP 0
 #endif
 
+#ifndef ETH_DISABLE_DHCP
+#define ETH_DISABLE_DHCP 0
+#endif
+
 #ifndef ETH_PING_ONLY
 #define ETH_PING_ONLY 0
 #endif
@@ -42,6 +46,10 @@
 
 #ifndef ETH_NO_REINIT_AFTER_SUCCESS
 #define ETH_NO_REINIT_AFTER_SUCCESS 0
+#endif
+
+#ifndef ETH_TCP_SERVER_DEBUG
+#define ETH_TCP_SERVER_DEBUG 0
 #endif
 
 #ifndef ETH_STATIC_IP_A
@@ -145,6 +153,8 @@ class EthernetSerialInterface : public BaseSerialInterface {
   unsigned long beginMillis;
   unsigned long lastDhcpAttempt;
   unsigned long lastMaintain;
+  unsigned long lastServiceLog;
+  unsigned long lastClientLog;
 
   EthernetServer *server;
   // RAK13800's EthernetClient::connected() is not const, but MeshCore's
