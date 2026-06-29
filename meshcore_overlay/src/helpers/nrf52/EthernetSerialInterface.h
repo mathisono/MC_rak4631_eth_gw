@@ -100,6 +100,7 @@ class EthernetSerialInterface : public BaseSerialInterface {
   Frame recv_queue[ETH_FRAME_QUEUE_SIZE];
   int send_queue_len;
   Frame send_queue[ETH_FRAME_QUEUE_SIZE];
+  unsigned long lastDelayLog;
 
   void clearBuffers();
   void resetReceivedFrameHeader();

@@ -50,6 +50,10 @@ def patch_ethernet_serial_interface(meshcore: Path) -> None:
     path = meshcore / "src" / "helpers" / "nrf52" / "EthernetSerialInterface.cpp"
     text = read(path)
 
+    if "entering EthernetSerialInterface::begin()" in text:
+        print("skipped EthernetSerialInterface.cpp patching; overlay version already present")
+        return
+
     text = replace_once(
         text,
         """    : deviceConnected(false), ethernetReady(false), _isEnabled(false), _port(TCP_PORT),

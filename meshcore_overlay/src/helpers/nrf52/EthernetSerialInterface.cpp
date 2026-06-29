@@ -6,6 +6,13 @@
 #define ETH_DEBUG_LOGGING 0
 #endif
 
+#ifndef ETH_CHECK_LINK_STATUS
+#define ETH_CHECK_LINK_STATUS 0
+#endif
+
+#include <type_traits>
+#include <utility>
+
 #if ETH_DEBUG_LOGGING && ARDUINO
 #define ETH_DEBUG_PRINT(F, ...) Serial.printf("ETH: " F, ##__VA_ARGS__)
 #define ETH_DEBUG_PRINTLN(F, ...) Serial.printf("ETH: " F "\n", ##__VA_ARGS__)
@@ -14,9 +21,87 @@
 #define ETH_DEBUG_PRINTLN(...) {}
 #endif
 
+namespace {
+
+template <typename T>
+class has_hardware_status {
+  template <typename U>
+  static auto test(int) -> decltype(std::declval<U>().hardwareStatus(), std::true_type{});
+
+  template <typename>
+  static std::false_type test(...);
+
+public:
+  static constexpr bool value = decltype(test<T>(0))::value;
+};
+
+template <typename T>
+class has_link_status {
+  template <typename U>
+  static auto test(int) -> decltype(std::declval<U>().linkStatus(), std::true_type{});
+
+  template <typename>
+  static std::false_type test(...);
+
+public:
+  static constexpr bool value = decltype(test<T>(0))::value;
+};
+
+template <typename EthernetT, bool CanCheck = has_hardware_status<EthernetT>::value && has_link_status<EthernetT>::value>
+struct EthernetStatusLogger;
+
+template <typename EthernetT>
+struct EthernetStatusLogger<EthernetT, true> {
+  static void logBeforeDhcp(EthernetT &ethernet) {
+    ETH_DEBUG_PRINTLN("hardwareStatus=%d", (int)ethernet.hardwareStatus());
+    ETH_DEBUG_PRINTLN("linkStatus=%d", (int)ethernet.linkStatus());
+  }
+
+  static void logFailure(EthernetT &ethernet) {
+    auto hwStatus = ethernet.hardwareStatus();
+    auto linkStatus = ethernet.linkStatus();
+    if (hwStatus == EthernetNoHardware) {
+      ETH_DEBUG_PRINTLN("EthernetNoHardware");
+    } else if (linkStatus == LinkOFF) {
+      ETH_DEBUG_PRINTLN("LinkOFF");
+    } else {
+      ETH_DEBUG_PRINTLN("unknown Ethernet error (hardware=%d link=%d)", (int)hwStatus, (int)linkStatus);
+    }
+  }
+
+  static void logRunning(EthernetT &ethernet) {
+    if (ethernet.hardwareStatus() == EthernetNoHardware || ethernet.linkStatus() == LinkOFF) {
+      ETH_DEBUG_PRINTLN("EthernetNoHardware / LinkOFF while running, resetting state");
+    }
+  }
+
+  static bool isDown(EthernetT &ethernet) {
+    return ethernet.hardwareStatus() == EthernetNoHardware || ethernet.linkStatus() == LinkOFF;
+  }
+};
+
+template <typename EthernetT>
+struct EthernetStatusLogger<EthernetT, false> {
+  static void logBeforeDhcp(EthernetT &) {
+    ETH_DEBUG_PRINTLN("hardware/link status checks unavailable at compile time");
+  }
+
+  static void logFailure(EthernetT &) {
+    ETH_DEBUG_PRINTLN("unknown Ethernet error");
+  }
+
+  static void logRunning(EthernetT &) {}
+
+  static bool isDown(EthernetT &) {
+    return false;
+  }
+};
+
+} // namespace
+
 EthernetSerialInterface::EthernetSerialInterface()
     : deviceConnected(false), ethernetReady(false), _isEnabled(false), _port(TCP_PORT),
-      lastDhcpAttempt(0), lastMaintain(0), server(nullptr), client(EthernetClient()) {
+      lastDhcpAttempt(0), lastMaintain(0), lastDelayLog(0), server(nullptr), client(EthernetClient()) {
   send_queue_len = recv_queue_len = 0;
   received_frame_header.type = 0;
   received_frame_header.length = 0;
@@ -59,6 +144,7 @@ void EthernetSerialInterface::makeMac(uint8_t mac[6]) {
 
 void EthernetSerialInterface::powerUpEthernet() {
 #ifdef PIN_3V3_EN
+  ETH_DEBUG_PRINTLN("PIN_3V3_EN set HIGH");
   pinMode(PIN_3V3_EN, OUTPUT);
   digitalWrite(PIN_3V3_EN, HIGH);
   delay(100);
@@ -67,6 +153,7 @@ void EthernetSerialInterface::powerUpEthernet() {
 
 void EthernetSerialInterface::resetEthernet() {
 #ifdef PIN_ETHERNET_RESET
+  ETH_DEBUG_PRINTLN("PIN_ETHERNET_RESET LOW/HIGH pulse");
   pinMode(PIN_ETHERNET_RESET, OUTPUT);
   digitalWrite(PIN_ETHERNET_RESET, LOW);
   delay(100);
@@ -76,6 +163,7 @@ void EthernetSerialInterface::resetEthernet() {
 }
 
 bool EthernetSerialInterface::startEthernet() {
+  ETH_DEBUG_PRINTLN("entering startEthernet()");
   powerUpEthernet();
   resetEthernet();
 
@@ -88,35 +176,59 @@ bool EthernetSerialInterface::startEthernet() {
 #ifdef ETH_SPI_SET_PINS
   ETH_SPI_PORT.setPins(ETH_SPI_SCK, ETH_SPI_MISO, ETH_SPI_MOSI);
 #endif
+  ETH_DEBUG_PRINTLN("ETH_SPI_PORT.begin()");
   ETH_SPI_PORT.begin();
+  ETH_DEBUG_PRINTLN("Ethernet.init(ETH_SPI_PORT, PIN_ETHERNET_SS)");
   Ethernet.init(ETH_SPI_PORT, PIN_ETHERNET_SS);
 #else
+  ETH_DEBUG_PRINTLN("SPI.begin()");
   SPI.begin();
+  ETH_DEBUG_PRINTLN("Ethernet.init(PIN_ETHERNET_SS)");
   Ethernet.init(PIN_ETHERNET_SS);
 #endif
 
   uint8_t mac[6];
   makeMac(mac);
+  ETH_DEBUG_PRINTLN("MAC %02X:%02X:%02X:%02X:%02X:%02X", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 
-  ETH_DEBUG_PRINTLN("starting DHCP on RAK13800/W5100S, CS=%d, port=%d", PIN_ETHERNET_SS, _port);
+  ETH_DEBUG_PRINTLN("Ethernet.hardwareStatus() before DHCP");
+#if ETH_CHECK_LINK_STATUS
+  ETH_DEBUG_PRINTLN("Ethernet.linkStatus() before DHCP");
+  EthernetStatusLogger<decltype(Ethernet)>::logBeforeDhcp(Ethernet);
+#else
+  ETH_DEBUG_PRINTLN("hardware/link status checks disabled");
+#endif
+  ETH_DEBUG_PRINTLN("Ethernet.begin(mac) start");
   int status = Ethernet.begin(mac);
+  ETH_DEBUG_PRINTLN("Ethernet.begin(mac) return status=%d", status);
 
   if (status == 0) {
     ethernetReady = false;
     lastDhcpAttempt = millis();
-    ETH_DEBUG_PRINTLN("DHCP failed");
+    EthernetStatusLogger<decltype(Ethernet)>::logFailure(Ethernet);
     return false;
   }
 
   ethernetReady = true;
   lastMaintain = millis();
-  ETH_DEBUG_PRINTLN("IP %u.%u.%u.%u", Ethernet.localIP()[0], Ethernet.localIP()[1], Ethernet.localIP()[2], Ethernet.localIP()[3]);
+  ETH_DEBUG_PRINTLN("localIP %u.%u.%u.%u", Ethernet.localIP()[0], Ethernet.localIP()[1], Ethernet.localIP()[2], Ethernet.localIP()[3]);
+  ETH_DEBUG_PRINTLN("subnet %u.%u.%u.%u", Ethernet.subnetMask()[0], Ethernet.subnetMask()[1], Ethernet.subnetMask()[2], Ethernet.subnetMask()[3]);
+  ETH_DEBUG_PRINTLN("gateway %u.%u.%u.%u", Ethernet.gatewayIP()[0], Ethernet.gatewayIP()[1], Ethernet.gatewayIP()[2], Ethernet.gatewayIP()[3]);
+  ETH_DEBUG_PRINTLN("dns %u.%u.%u.%u", Ethernet.dnsServerIP()[0], Ethernet.dnsServerIP()[1], Ethernet.dnsServerIP()[2], Ethernet.dnsServerIP()[3]);
   return true;
 }
 
 void EthernetSerialInterface::begin(int port) {
+  ETH_DEBUG_PRINTLN("entering EthernetSerialInterface::begin()");
   _port = port;
+  beginMillis = millis();
+  lastDhcpAttempt = beginMillis;
+  lastMaintain = beginMillis;
+  lastDelayLog = beginMillis;
+  ethernetReady = false;
+  ethernetStarted = false;
 
+#if ETH_START_DELAY_MS == 0
   if (!startEthernet()) {
     // Leave server unset until DHCP succeeds during serviceEthernet().
     return;
@@ -128,6 +240,9 @@ void EthernetSerialInterface::begin(int port) {
   server = new EthernetServer(_port);
   server->begin();
   ETH_DEBUG_PRINTLN("TCP companion server listening on %d", _port);
+#else
+  ETH_DEBUG_PRINTLN("Ethernet startup delayed by %lu ms", (unsigned long)ETH_START_DELAY_MS);
+#endif
 }
 
 void EthernetSerialInterface::enable() {
@@ -154,9 +269,24 @@ void EthernetSerialInterface::dropClient() {
 }
 
 void EthernetSerialInterface::serviceEthernet() {
+  ETH_DEBUG_PRINTLN("entering serviceEthernet()");
   unsigned long now = millis();
 
   if (!ethernetReady) {
+#if ETH_START_DELAY_MS > 0
+    if (!ethernetStarted) {
+      unsigned long elapsed = now - beginMillis;
+      if (elapsed < ETH_START_DELAY_MS) {
+        if (now - lastDelayLog >= 1000UL) {
+          lastDelayLog = now;
+          ETH_DEBUG_PRINTLN("delay countdown: %lu ms remaining",
+                            (unsigned long)(ETH_START_DELAY_MS - elapsed));
+        }
+        return;
+      }
+      ETH_DEBUG_PRINTLN("delay expired");
+    }
+#endif
     if (now - lastDhcpAttempt >= ETH_DHCP_RETRY_MS) {
       if (startEthernet()) {
         if (!server) {
@@ -174,12 +304,14 @@ void EthernetSerialInterface::serviceEthernet() {
     lastMaintain = now;
   }
 
-  if (Ethernet.hardwareStatus() == EthernetNoHardware || Ethernet.linkStatus() == LinkOFF) {
-    ETH_DEBUG_PRINTLN("ethernet unavailable, resetting state");
+#if ETH_CHECK_LINK_STATUS
+  EthernetStatusLogger<decltype(Ethernet)>::logRunning(Ethernet);
+  if (EthernetStatusLogger<decltype(Ethernet)>::isDown(Ethernet)) {
     ethernetReady = false;
     dropClient();
     lastDhcpAttempt = now;
   }
+#endif
 }
 
 void EthernetSerialInterface::serviceClient() {
