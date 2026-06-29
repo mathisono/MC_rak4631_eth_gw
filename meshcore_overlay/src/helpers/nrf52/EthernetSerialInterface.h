@@ -183,15 +183,16 @@ class EthernetSerialInterface : public BaseSerialInterface {
   unsigned long lastDelayLog;
   unsigned long pendingClientSince;
   bool pendingClientValid;
-  bool pendingFrameBuffered;
-  bool pendingFrameDeliverable;
-  Frame pendingFrame;
+  uint8_t injected_frame_buf[MAX_FRAME_SIZE];
+  size_t injected_frame_len;
+  bool injected_frame_valid;
 
   void clearBuffers();
   void resetReceivedFrameHeader();
   void resetPendingReceivedFrameHeader();
   bool hasReceivedFrameHeader() const;
   bool hasPendingReceivedFrameHeader() const;
+  void clearInjectedFrame();
   void makeMac(uint8_t mac[6]);
   void powerUpEthernet();
   void resetEthernet();

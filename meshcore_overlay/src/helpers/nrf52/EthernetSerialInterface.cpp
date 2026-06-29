@@ -103,13 +103,12 @@ EthernetSerialInterface::EthernetSerialInterface()
     : deviceConnected(false), ethernetReady(false), _isEnabled(false), _port(TCP_PORT),
       lastDhcpAttempt(0), lastMaintain(0), lastServiceLog(0), lastClientLog(0), lastDelayLog(0),
       server(nullptr), client(EthernetClient()), pendingClient(EthernetClient()), pendingClientSince(0),
-      pendingClientValid(false), pendingFrameBuffered(false), pendingFrameDeliverable(false) {
+      pendingClientValid(false), injected_frame_len(0), injected_frame_valid(false) {
   send_queue_len = recv_queue_len = 0;
   received_frame_header.type = 0;
   received_frame_header.length = 0;
   pending_received_frame_header.type = 0;
   pending_received_frame_header.length = 0;
-  pendingFrame.len = 0;
 }
 
 EthernetSerialInterface::~EthernetSerialInterface() {
@@ -321,11 +320,13 @@ void EthernetSerialInterface::dropClient() {
 void EthernetSerialInterface::clearPendingClient() {
   pendingClientValid = false;
   pendingClientSince = 0;
-  pendingFrameBuffered = false;
-  pendingFrameDeliverable = false;
-  pendingFrame.len = 0;
   resetPendingReceivedFrameHeader();
   pendingClient = EthernetClient();
+}
+
+void EthernetSerialInterface::clearInjectedFrame() {
+  injected_frame_valid = false;
+  injected_frame_len = 0;
 }
 
 void EthernetSerialInterface::promotePendingClientToActive() {
@@ -405,7 +406,7 @@ void EthernetSerialInterface::serviceClient() {
     unsigned long now = millis();
     if (!pendingClient.connected()) {
       clearPendingClient();
-    } else if (!pendingFrameBuffered) {
+    } else if (!injected_frame_valid) {
       if (now - pendingClientSince > 5000UL) {
         ETH_DEBUG_PRINTLN("pending TCP client timeout");
         pendingClient.stop();
@@ -423,16 +424,16 @@ void EthernetSerialInterface::serviceClient() {
           int frameLength = pending_received_frame_header.length;
           if (frameType == '<' && frameLength > 0 && frameLength <= MAX_FRAME_SIZE &&
               pendingClient.available() >= frameLength) {
-            pendingClient.readBytes(pendingFrame.buf, frameLength);
-            pendingFrame.len = frameLength;
-            pendingFrameBuffered = true;
+            uint8_t frameBuf[MAX_FRAME_SIZE];
+            pendingClient.readBytes(frameBuf, frameLength);
             resetPendingReceivedFrameHeader();
-            int cmd = pendingFrame.buf[0];
+            int cmd = frameBuf[0];
             if (cmd == 1 || cmd == 22) {
+              memcpy(injected_frame_buf, frameBuf, frameLength);
+              injected_frame_len = frameLength;
+              injected_frame_valid = true;
               ETH_DEBUG_PRINTLN("pending client sent startup command, switching active client");
               promotePendingClientToActive();
-              pendingFrameDeliverable = true;
-              ETH_DEBUG_PRINTLN("TCP client connected");
             }
           }
         }
@@ -444,9 +445,6 @@ void EthernetSerialInterface::serviceClient() {
     if (pendingClientValid) {
       promotePendingClientToActive();
       ETH_DEBUG_PRINTLN("promoted pending TCP client to active");
-      if (pendingFrameBuffered) {
-        pendingFrameDeliverable = true;
-      }
     } else {
       dropClient();
     }
@@ -488,12 +486,12 @@ size_t EthernetSerialInterface::checkRecvFrame(uint8_t dest[]) {
   serviceEthernet();
   serviceClient();
 
-  if (pendingFrameDeliverable) {
-    size_t len = pendingFrame.len;
-    memcpy(dest, pendingFrame.buf, len);
-    pendingFrameDeliverable = false;
-    pendingFrameBuffered = false;
-    pendingFrame.len = 0;
+  if (injected_frame_valid) {
+    size_t len = injected_frame_len;
+    memcpy(dest, injected_frame_buf, len);
+    ETH_DEBUG_PRINTLN("delivering injected pending frame len=%u cmd=%u", (unsigned)len,
+                      (unsigned)(len > 0 ? injected_frame_buf[0] : 0));
+    clearInjectedFrame();
     return len;
   }
 
