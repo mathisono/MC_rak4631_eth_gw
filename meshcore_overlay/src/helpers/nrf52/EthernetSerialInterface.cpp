@@ -308,11 +308,6 @@ void EthernetSerialInterface::dropClient() {
 void EthernetSerialInterface::serviceEthernet() {
   unsigned long now = millis();
 
-  if (lastServiceLog == 0 || now - lastServiceLog >= 5000UL) {
-    lastServiceLog = now;
-    ETH_DEBUG_PRINTLN("entering serviceEthernet()");
-  }
-
   if (ethernetReady) {
     return;
   }
@@ -343,25 +338,19 @@ void EthernetSerialInterface::serviceEthernet() {
 }
 
 void EthernetSerialInterface::serviceClient() {
-#if ETH_TCP_SERVER_DEBUG
-  unsigned long now = millis();
-  if (lastClientLog == 0 || now - lastClientLog >= 5000UL) {
-    lastClientLog = now;
-    ETH_DEBUG_PRINTLN("serviceClient server=%d ready=%d", server ? 1 : 0, ethernetReady ? 1 : 0);
-  }
-#endif
-
   if (!server || !ethernetReady) return;
 
   EthernetClient newClient = server->available();
   if (newClient) {
-    if (deviceConnected && client) {
-      client.stop();
+    if (deviceConnected && client && client.connected()) {
+      ETH_DEBUG_PRINTLN("rejecting extra TCP client, active client already connected");
+      newClient.stop();
+    } else {
+      client = newClient;
+      deviceConnected = true;
+      resetReceivedFrameHeader();
+      ETH_DEBUG_PRINTLN("TCP client connected");
     }
-    client = newClient;
-    deviceConnected = true;
-    resetReceivedFrameHeader();
-    ETH_DEBUG_PRINTLN("TCP client connected");
   }
 
   if (deviceConnected && !client.connected()) {
@@ -402,9 +391,7 @@ size_t EthernetSerialInterface::checkRecvFrame(uint8_t dest[]) {
   if (!_isEnabled) return 0;
 
   serviceEthernet();
-  ETH_DEBUG_PRINTLN("after serviceEthernet");
   serviceClient();
-  ETH_DEBUG_PRINTLN("after serviceClient");
 
   if (!deviceConnected) return 0;
 
@@ -444,22 +431,24 @@ size_t EthernetSerialInterface::checkRecvFrame(uint8_t dest[]) {
   int frameLength = received_frame_header.length;
 
   if (frameType != '<') {
-    ETH_DEBUG_PRINTLN("dropping unexpected frame type=0x%x len=%d", frameType, frameLength);
+    ETH_DEBUG_PRINTLN("TCP parser error frame type=0x%x len=%d", frameType, frameLength);
     while (frameLength > 0 && client.available()) {
       client.read();
       frameLength--;
     }
     if (frameLength == 0) resetReceivedFrameHeader();
+    dropClient();
     return 0;
   }
 
   if (frameLength > MAX_FRAME_SIZE) {
-    ETH_DEBUG_PRINTLN("dropping oversize frame len=%d max=%d", frameLength, MAX_FRAME_SIZE);
+    ETH_DEBUG_PRINTLN("TCP parser error oversize frame len=%d max=%d", frameLength, MAX_FRAME_SIZE);
     while (frameLength > 0 && client.available()) {
       client.read();
       frameLength--;
     }
     if (frameLength == 0) resetReceivedFrameHeader();
+    dropClient();
     return 0;
   }
 
