@@ -103,7 +103,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          name: RAK4631 Companion Ethernet injected-frame handoff fix
+          name: RAK4631 Companion Ethernet Wiznet handoff fix
           files: |
             dist/**
           generate_release_notes: true
