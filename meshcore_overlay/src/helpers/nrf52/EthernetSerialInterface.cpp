@@ -18,6 +18,7 @@ EthernetSerialInterface::EthernetSerialInterface()
     : deviceConnected(false), ethernetReady(false), ethernetStarted(false), _isEnabled(false),
       _port(TCP_PORT), beginMillis(0), lastDhcpAttempt(0), lastMaintain(0), lastDelayLog(0),
       server(nullptr), client(EthernetClient()), pendingClient(EthernetClient()),
+      pendingClientValid(false), pendingClientAliasedToActive(false),
       injected_frame_len(0), injected_frame_valid(false), pending_frame_len(0),
       pending_frame_pos(0), pending_state(PENDING_WAIT_MAGIC), pending_last_progress_ms(0) {
   send_queue_len = recv_queue_len = 0;
@@ -62,10 +63,15 @@ void EthernetSerialInterface::resetPendingParserOnly() {
 }
 
 void EthernetSerialInterface::resetPendingClient() {
-  if (pendingClient) {
+  // Do not stop pendingClient when it has just been promoted to active.
+  // Some Wiznet/RAK EthernetClient wrappers share an internal socket index after
+  // assignment; clearing/stopping the old object can send FIN/RST to the active socket.
+  if (pendingClientValid && !pendingClientAliasedToActive && pendingClient) {
     pendingClient.stop();
+    delay(1);
   }
-  pendingClient = EthernetClient();
+  pendingClientValid = false;
+  pendingClientAliasedToActive = false;
   resetPendingParserOnly();
 }
 
@@ -178,6 +184,8 @@ void EthernetSerialInterface::begin(int port) {
   resetReceivedFrameHeader();
   resetPendingParserOnly();
   resetInjectedFrame();
+  pendingClientValid = false;
+  pendingClientAliasedToActive = false;
 }
 
 void EthernetSerialInterface::enable() {
@@ -204,11 +212,15 @@ void EthernetSerialInterface::dropClient() {
     delay(1);
   }
   client = EthernetClient();
+  if (pendingClientAliasedToActive) {
+    pendingClientValid = false;
+    pendingClientAliasedToActive = false;
+  }
   resetReceivedFrameHeader();
 }
 
 bool EthernetSerialInterface::promotePendingClientWithoutInjectedFrame() {
-  if (!pendingClient || !pendingClient.connected()) return false;
+  if (!pendingClientValid || !pendingClient || !pendingClient.connected()) return false;
 
   if (client) {
     client.stop();
@@ -216,7 +228,10 @@ bool EthernetSerialInterface::promotePendingClientWithoutInjectedFrame() {
   }
 
   client = pendingClient;
-  pendingClient = EthernetClient();
+  // Do not clear pendingClient with EthernetClient(); the object may share the same
+  // W5100S socket index now stored in client.
+  pendingClientValid = false;
+  pendingClientAliasedToActive = true;
   deviceConnected = true;
   resetReceivedFrameHeader();
   resetPendingParserOnly();
@@ -225,7 +240,7 @@ bool EthernetSerialInterface::promotePendingClientWithoutInjectedFrame() {
 }
 
 bool EthernetSerialInterface::promotePendingClientWithInjectedFrame() {
-  if (!pendingClient || !pendingClient.connected()) return false;
+  if (!pendingClientValid || !pendingClient || !pendingClient.connected()) return false;
   if (pending_frame_len == 0 || pending_frame_len > MAX_FRAME_SIZE) return false;
 
   memcpy(injected_frame, pending_frame_buf, pending_frame_len);
@@ -241,7 +256,10 @@ bool EthernetSerialInterface::promotePendingClientWithInjectedFrame() {
   }
 
   client = pendingClient;
-  pendingClient = EthernetClient();
+  // Do not clear pendingClient with EthernetClient(); some Wiznet client wrappers
+  // may tear down the underlying socket when assigning a blank client.
+  pendingClientValid = false;
+  pendingClientAliasedToActive = true;
   deviceConnected = true;
   resetReceivedFrameHeader();
   resetPendingParserOnly();
@@ -250,10 +268,11 @@ bool EthernetSerialInterface::promotePendingClientWithInjectedFrame() {
 }
 
 bool EthernetSerialInterface::servicePendingClient() {
-  if (!pendingClient) return false;
+  if (!pendingClientValid) return false;
+  if (pendingClientAliasedToActive) return false;
 
   const unsigned long now = millis();
-  if (!pendingClient.connected()) {
+  if (!pendingClient || !pendingClient.connected()) {
     ETH_DEBUG_PRINTLN("pending TCP client disconnected");
     resetPendingClient();
     return false;
@@ -375,14 +394,19 @@ void EthernetSerialInterface::serviceClient() {
       }
       client = newClient;
       deviceConnected = true;
+      pendingClientAliasedToActive = false;
       resetReceivedFrameHeader();
       ETH_DEBUG_PRINTLN("TCP client connected");
-    } else if (!pendingClient || !pendingClient.connected()) {
+    } else if (!pendingClientValid && !pendingClientAliasedToActive) {
       pendingClient = newClient;
+      pendingClientValid = true;
       resetPendingParserOnly();
       ETH_DEBUG_PRINTLN("TCP pending client connected");
     } else {
-      ETH_DEBUG_PRINTLN("rejecting extra TCP client, pending already exists");
+      // After a handoff, pendingClient may still be an alias of the active socket.
+      // Reject extras rather than assigning over that object and risking FIN/RST
+      // on the active W5100S socket.
+      ETH_DEBUG_PRINTLN("rejecting extra TCP client, pending slot unavailable");
       newClient.stop();
     }
   }
@@ -394,7 +418,10 @@ void EthernetSerialInterface::serviceClient() {
     deviceConnected = false;
     client = EthernetClient();
     resetReceivedFrameHeader();
-    if (pendingClient && pendingClient.connected()) {
+    if (pendingClientAliasedToActive) {
+      pendingClientAliasedToActive = false;
+      pendingClientValid = false;
+    } else if (pendingClientValid && pendingClient.connected()) {
       promotePendingClientWithoutInjectedFrame();
     }
   }
