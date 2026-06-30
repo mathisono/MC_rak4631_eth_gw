@@ -386,7 +386,11 @@ void EthernetSerialInterface::serviceEthernet() {
 void EthernetSerialInterface::serviceClient() {
   if (!server || !ethernetReady) return;
 
-  EthernetClient newClient = server->available();
+  // RAK13800 EthernetServer::available() returns any connected socket that has
+  // unread data and does not transfer ownership. That can return the already
+  // active socket again and make us misclassify it as a pending client.
+  // accept() returns an established socket once and clears server_port[i].
+  EthernetClient newClient = server->accept();
   if (newClient) {
     if (!deviceConnected || !client.connected()) {
       if (deviceConnected && !client.connected()) {
@@ -396,12 +400,12 @@ void EthernetSerialInterface::serviceClient() {
       deviceConnected = true;
       pendingClientAliasedToActive = false;
       resetReceivedFrameHeader();
-      ETH_DEBUG_PRINTLN("TCP client connected");
-    } else if (!pendingClientValid && !pendingClientAliasedToActive) {
+      ETH_DEBUG_PRINTLN("TCP client accepted");
+    } else if (!pendingClientValid && !pendingClientAliasedToActive && newClient != client) {
       pendingClient = newClient;
       pendingClientValid = true;
       resetPendingParserOnly();
-      ETH_DEBUG_PRINTLN("TCP pending client connected");
+      ETH_DEBUG_PRINTLN("TCP pending client accepted");
     } else {
       // After a handoff, pendingClient may still be an alias of the active socket.
       // Reject extras rather than assigning over that object and risking FIN/RST
