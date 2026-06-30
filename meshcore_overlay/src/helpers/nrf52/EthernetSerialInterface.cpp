@@ -406,35 +406,33 @@ void EthernetSerialInterface::serviceClient() {
     unsigned long now = millis();
     if (!pendingClient.connected()) {
       clearPendingClient();
-    } else if (!injected_frame_valid) {
-      if (now - pendingClientSince > 5000UL) {
-        ETH_DEBUG_PRINTLN("pending TCP client timeout");
-        pendingClient.stop();
-        clearPendingClient();
-      } else {
-        if (!hasPendingReceivedFrameHeader()) {
-          if (pendingClient.available() >= 3) {
-            pendingClient.readBytes(&pending_received_frame_header.type, 1);
-            pendingClient.readBytes((uint8_t *)&pending_received_frame_header.length, 2);
-          }
+    } else if (now - pendingClientSince > 5000UL) {
+      ETH_DEBUG_PRINTLN("pending TCP client timeout");
+      pendingClient.stop();
+      clearPendingClient();
+    } else {
+      if (!hasPendingReceivedFrameHeader()) {
+        if (pendingClient.available() >= 3) {
+          pendingClient.readBytes(&pending_received_frame_header.type, 1);
+          pendingClient.readBytes((uint8_t *)&pending_received_frame_header.length, 2);
         }
+      }
 
-        if (hasPendingReceivedFrameHeader()) {
-          int frameType = pending_received_frame_header.type;
-          int frameLength = pending_received_frame_header.length;
-          if (frameType == '<' && frameLength > 0 && frameLength <= MAX_FRAME_SIZE &&
-              pendingClient.available() >= frameLength) {
-            uint8_t frameBuf[MAX_FRAME_SIZE];
-            pendingClient.readBytes(frameBuf, frameLength);
-            resetPendingReceivedFrameHeader();
-            int cmd = frameBuf[0];
-            if (cmd == 1 || cmd == 22) {
-              memcpy(injected_frame_buf, frameBuf, frameLength);
-              injected_frame_len = frameLength;
-              injected_frame_valid = true;
-              ETH_DEBUG_PRINTLN("pending client sent startup command, switching active client");
-              promotePendingClientToActive();
-            }
+      if (hasPendingReceivedFrameHeader()) {
+        int frameType = pending_received_frame_header.type;
+        int frameLength = pending_received_frame_header.length;
+        if (frameType == '<' && frameLength > 0 && frameLength <= MAX_FRAME_SIZE &&
+            pendingClient.available() >= frameLength) {
+          uint8_t frameBuf[MAX_FRAME_SIZE];
+          pendingClient.readBytes(frameBuf, frameLength);
+          resetPendingReceivedFrameHeader();
+          int cmd = frameBuf[0];
+          if (cmd == 1 || cmd == 22) {
+            memcpy(injected_frame_buf, frameBuf, frameLength);
+            injected_frame_len = frameLength;
+            injected_frame_valid = true;
+            ETH_DEBUG_PRINTLN("pending client sent startup command, switching active client");
+            promotePendingClientToActive();
           }
         }
       }
