@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """
-Prepare an upstream MeshCore checkout to build the RAK4631 Companion API target.
+Prepare an upstream MeshCore checkout to build the RAK4631 / RAK13800
+Ethernet companion target.
 
-Primary target now means:
-- MeshCore companion_radio firmware
-- Companion app API over BLE
-- Companion app API over RAK13800 Ethernet TCP
-- client repeat forced on for repeater-like behavior
-- no MQTT in the default build
+Primary target now follows MeshCore PR #2679's experimental Ethernet companion
+approach:
+- RAK4631 + RAK13800/W5100S
+- MeshCore companion protocol over TCP
+- multi-client SerialEthernetInterface
+- W5100S Ethernet hardware init deferred into loop()
 """
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ import argparse
 import shutil
 from pathlib import Path
 
-TARGET_ENV = "RAK_4631_companion_repeater_eth_ble"
+TARGET_ENV = "RAK_4631_companion_radio_eth_clean"
 
 
 def read(path: Path) -> str:
@@ -35,10 +36,30 @@ def replace_once(text: str, old: str, new: str, label: str) -> str:
     return text.replace(old, new, 1)
 
 
+def copy_if_present(src: Path, dst: Path, label: str) -> None:
+    if src.exists():
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dst)
+        print(f"copied {label}")
+
+
 def copy_overlay(overlay: Path, meshcore: Path) -> None:
-    nrf_src = overlay / "meshcore_overlay" / "src" / "helpers" / "nrf52"
-    nrf_dst = meshcore / "src" / "helpers" / "nrf52"
-    nrf_dst.mkdir(parents=True, exist_ok=True)
+    helpers_src = overlay / "meshcore_overlay" / "src" / "helpers"
+    helpers_dst = meshcore / "src" / "helpers"
+    nrf_src = helpers_src / "nrf52"
+    nrf_dst = helpers_dst / "nrf52"
+
+    # New upstream-style Ethernet companion transport from MeshCore PR #2679.
+    copy_if_present(helpers_src / "SerialEthernetInterface.h", helpers_dst / "SerialEthernetInterface.h", "src/helpers/SerialEthernetInterface.h")
+    copy_if_present(helpers_src / "SerialEthernetInterface.cpp", helpers_dst / "SerialEthernetInterface.cpp", "src/helpers/SerialEthernetInterface.cpp")
+
+    # Keep legacy helper files available for older/manual targets, but the clean
+    # target no longer depends on EthernetSerialInterface.
+    for name in (
+        "DualSerialInterface.h",
+        "DualSerialInterface.cpp",
+    ):
+        copy_if_present(helpers_src / name, helpers_dst / name, f"src/helpers/{name}")
 
     for name in (
         "BLECommandAPI.h",
@@ -48,105 +69,7 @@ def copy_overlay(overlay: Path, meshcore: Path) -> None:
         "EthernetSerialInterface.h",
         "EthernetSerialInterface.cpp",
     ):
-        shutil.copy2(nrf_src / name, nrf_dst / name)
-        print(f"copied src/helpers/nrf52/{name}")
-
-    helpers_src = overlay / "meshcore_overlay" / "src" / "helpers"
-    helpers_dst = meshcore / "src" / "helpers"
-    for name in ("DualSerialInterface.h", "DualSerialInterface.cpp"):
-        shutil.copy2(helpers_src / name, helpers_dst / name)
-        print(f"copied src/helpers/{name}")
-
-
-def patch_ethernet_serial_interface(meshcore: Path) -> None:
-    path = meshcore / "src" / "helpers" / "nrf52" / "EthernetSerialInterface.cpp"
-    text = read(path)
-
-    text = replace_once(
-        text,
-        """    : deviceConnected(false), ethernetReady(false), _isEnabled(false), _port(TCP_PORT),
-      lastDhcpAttempt(0), lastMaintain(0), server(nullptr), client(EthernetClient()) {
-""",
-        """    : deviceConnected(false), ethernetReady(false), ethernetStarted(false), _isEnabled(false), _port(TCP_PORT),
-      beginMillis(0), lastDhcpAttempt(0), lastMaintain(0), server(nullptr), client(EthernetClient()) {
-""",
-        "ethernet delayed-start constructor",
-    )
-
-    text = replace_once(
-        text,
-        """bool EthernetSerialInterface::startEthernet() {
-  powerUpEthernet();
-""",
-        """bool EthernetSerialInterface::startEthernet() {
-  ethernetStarted = true;
-  powerUpEthernet();
-""",
-        "ethernetStarted marker",
-    )
-
-    text = replace_once(
-        text,
-        """void EthernetSerialInterface::begin(int port) {
-  _port = port;
-
-  if (!startEthernet()) {
-    // Leave server unset until DHCP succeeds during serviceEthernet().
-    return;
-  }
-
-  if (server) {
-    delete server;
-  }
-  server = new EthernetServer(_port);
-  server->begin();
-  ETH_DEBUG_PRINTLN("TCP companion server listening on %d", _port);
-}
-""",
-        """void EthernetSerialInterface::begin(int port) {
-  _port = port;
-  beginMillis = millis();
-  lastDhcpAttempt = beginMillis;
-
-#if ETH_START_DELAY_MS == 0
-  if (!startEthernet()) {
-    return;
-  }
-
-  if (server) {
-    delete server;
-  }
-  server = new EthernetServer(_port);
-  server->begin();
-  ETH_DEBUG_PRINTLN("TCP companion server listening on %d", _port);
-#else
-  ETH_DEBUG_PRINTLN("Ethernet startup delayed by %lu ms", (unsigned long)ETH_START_DELAY_MS);
-#endif
-}
-""",
-        "delayed Ethernet begin",
-    )
-
-    text = replace_once(
-        text,
-        """  if (!ethernetReady) {
-    if (now - lastDhcpAttempt >= ETH_DHCP_RETRY_MS) {
-      if (startEthernet()) {
-""",
-        """  if (!ethernetReady) {
-#if ETH_START_DELAY_MS > 0
-    if (!ethernetStarted && now - beginMillis < ETH_START_DELAY_MS) {
-      return;
-    }
-#endif
-    if (!ethernetStarted || now - lastDhcpAttempt >= ETH_DHCP_RETRY_MS) {
-      if (startEthernet()) {
-""",
-        "delayed Ethernet service retry",
-    )
-
-    write(path, text)
-    print("patched src/helpers/nrf52/EthernetSerialInterface.cpp for delayed Ethernet startup")
+        copy_if_present(nrf_src / name, nrf_dst / name, f"src/helpers/nrf52/{name}")
 
 
 def patch_companion_main(meshcore: Path) -> None:
@@ -163,7 +86,28 @@ def patch_companion_main(meshcore: Path) -> None:
   #endif
 """
     new_select = """#elif defined(NRF52_PLATFORM)
-  #ifdef WITH_DUAL_BLE_ETHERNET_COMPANION_API
+  #if defined(WITH_ETHERNET_COMPANION)
+    #include <SPI.h>
+    #include <RAK13800_W5100S.h>
+    #include <helpers/SerialEthernetInterface.h>
+    SerialEthernetInterface serial_interface;
+    // Dedicated SPI for RAK13800/W5100S on WisBlock IO-slot pins.
+    // Keep it separate from LoRa SPI.
+    SPIClass eth_spi(NRF_SPIM2, 29, 3, 30);  // MISO=29, SCK=3, MOSI=30
+    uint8_t g_eth_mac[6] = {0};
+    #ifndef TCP_PORT
+      #define TCP_PORT 4403
+    #endif
+    #ifndef ETH_STATIC_IP
+      #define ETH_STATIC_IP 192,168,3,55
+    #endif
+    #ifndef ETH_GATEWAY
+      #define ETH_GATEWAY 192,168,3,3
+    #endif
+    #ifndef ETH_SUBNET
+      #define ETH_SUBNET 255,255,255,0
+    #endif
+  #elif defined(WITH_DUAL_BLE_ETHERNET_COMPANION_API)
     #include <helpers/nrf52/SerialBLEInterface.h>
     #include <helpers/nrf52/EthernetSerialInterface.h>
     #include <helpers/DualSerialInterface.h>
@@ -209,7 +153,26 @@ def patch_companion_main(meshcore: Path) -> None:
     #endif
   );
 
-#ifdef WITH_DUAL_BLE_ETHERNET_COMPANION_API
+#if defined(WITH_ETHERNET_COMPANION)
+  // Match MeshCore PR #2679: compute a stable local MAC here, but defer the
+  // disruptive W5100S Ethernet.begin()/PHY reset into loop().
+  g_eth_mac[0] = 0x02;
+  uint32_t id0 = NRF_FICR->DEVICEID[0];
+  uint32_t id1 = NRF_FICR->DEVICEID[1];
+  g_eth_mac[1] = (id0 >> 24) & 0xFF;
+  g_eth_mac[2] = (id0 >> 16) & 0xFF;
+  g_eth_mac[3] = (id0 >> 8) & 0xFF;
+  g_eth_mac[4] = id0 & 0xFF;
+  g_eth_mac[5] = id1 & 0xFF;
+
+  pinMode(34, OUTPUT); digitalWrite(34, HIGH);  // RAK19007 3V3 peripheral enable
+  pinMode(21, OUTPUT); digitalWrite(21, LOW); delay(100); digitalWrite(21, HIGH); delay(100);
+  pinMode(26, OUTPUT); digitalWrite(26, HIGH);  // W5100S CS idle high
+
+  eth_spi.begin();
+  Ethernet.init(eth_spi, 26);
+  Serial.println("Ethernet companion: bring-up deferred to loop()");
+#elif defined(WITH_DUAL_BLE_ETHERNET_COMPANION_API)
   ble_interface.begin(BLE_NAME_PREFIX, the_mesh.getNodePrefs()->node_name, the_mesh.getBLEPin());
   eth_interface.begin(TCP_PORT);
 #elif defined(WITH_ETHERNET_TCP_API)
@@ -224,8 +187,47 @@ def patch_companion_main(meshcore: Path) -> None:
 """
     text = replace_once(text, old_begin, new_begin, "NRF52 serial interface begin")
 
+    if "Ethernet up (deferred):" not in text:
+        loop_insert = r'''
+
+#if defined(WITH_ETHERNET_COMPANION)
+  static bool _eth_up = false;
+  if (!_eth_up && millis() > 6000) {
+#if defined(ETH_STATIC_ONLY)
+    IPAddress sip(ETH_STATIC_IP), sgw(ETH_GATEWAY), ssn(ETH_SUBNET);
+    Ethernet.begin(g_eth_mac, sip, sgw, sgw, ssn);
+    serial_interface.begin(TCP_PORT);
+#else
+    Serial.println("Ethernet: trying DHCP (deferred)...");
+    int dhcp_ok = Ethernet.begin(g_eth_mac, 12000, 4000);
+    if (!dhcp_ok) {
+      IPAddress sip(ETH_STATIC_IP), sgw(ETH_GATEWAY), ssn(ETH_SUBNET);
+      Ethernet.begin(g_eth_mac, sip, sgw, sgw, ssn);
+      Serial.println("Ethernet: DHCP failed -> static IP fallback");
+    }
+    serial_interface.begin(TCP_PORT);
+#endif
+    _eth_up = true;
+    IPAddress ip = Ethernet.localIP();
+    Serial.print("Ethernet up (deferred): ");
+    Serial.print(ip[0]); Serial.print('.'); Serial.print(ip[1]); Serial.print('.');
+    Serial.print(ip[2]); Serial.print('.'); Serial.print(ip[3]);
+    Serial.print(":"); Serial.println(TCP_PORT);
+  }
+#if !defined(ETH_STATIC_ONLY)
+  else if (_eth_up) {
+    Ethernet.maintain();
+  }
+#endif
+#endif
+'''
+        idx = text.rfind("\n}")
+        if idx < 0:
+            raise RuntimeError("could not find loop() closing brace")
+        text = text[:idx] + loop_insert + text[idx:]
+
     write(path, text)
-    print("patched examples/companion_radio/main.cpp")
+    print("patched examples/companion_radio/main.cpp for upstream Ethernet companion path")
 
 
 def patch_companion_mymesh(meshcore: Path) -> None:
@@ -255,7 +257,7 @@ def patch_rak4631_variant(meshcore: Path) -> None:
     text = read(path)
 
     old_spi_count = "#define SPI_INTERFACES_COUNT 1"
-    new_spi_count = """#if defined(WITH_ETHERNET_TCP_API) || defined(WITH_ETHERNET_COMMAND_API) || defined(WITH_DUAL_BLE_ETHERNET_COMPANION_API)
+    new_spi_count = """#if defined(WITH_ETHERNET_COMPANION) || defined(WITH_ETHERNET_TCP_API) || defined(WITH_ETHERNET_COMMAND_API) || defined(WITH_DUAL_BLE_ETHERNET_COMPANION_API)
 #define SPI_INTERFACES_COUNT 2
 #else
 #define SPI_INTERFACES_COUNT 1
@@ -271,7 +273,7 @@ def patch_rak4631_variant(meshcore: Path) -> None:
 #define PIN_SPI_MOSI (30)
 #define PIN_SPI_SCK (3)
 
-#if defined(WITH_ETHERNET_TCP_API) || defined(WITH_ETHERNET_COMMAND_API) || defined(WITH_DUAL_BLE_ETHERNET_COMPANION_API)
+#if defined(WITH_ETHERNET_COMPANION) || defined(WITH_ETHERNET_TCP_API) || defined(WITH_ETHERNET_COMMAND_API) || defined(WITH_DUAL_BLE_ETHERNET_COMPANION_API)
 #define PIN_SPI1_MISO (29)
 #define PIN_SPI1_MOSI (30)
 #define PIN_SPI1_SCK  (3)
@@ -300,8 +302,7 @@ def patch_platformio(meshcore: Path, overlay: Path) -> None:
 
     base = overlay / "meshcore_overlay" / "variants" / "rak4631_eth_gw"
     app_api = read(base / "app_api.addon.ini")
-    legacy = read(base / "platformio.addon.ini")
-    text = text.rstrip() + "\n\n" + app_api.rstrip() + "\n\n" + legacy.rstrip() + "\n"
+    text = text.rstrip() + "\n\n" + app_api.rstrip() + "\n"
     write(path, text)
     print("patched variants/rak4631/platformio.ini")
 
@@ -321,7 +322,6 @@ def main() -> None:
         raise SystemExit(f"not this overlay repo: {overlay}")
 
     copy_overlay(overlay, meshcore)
-    patch_ethernet_serial_interface(meshcore)
     patch_companion_main(meshcore)
     patch_companion_mymesh(meshcore)
     patch_rak4631_variant(meshcore)
