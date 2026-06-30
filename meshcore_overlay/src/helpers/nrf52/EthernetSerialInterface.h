@@ -149,6 +149,8 @@ class EthernetSerialInterface : public BaseSerialInterface {
   EthernetServer *server;
   mutable EthernetClient client;
   mutable EthernetClient pendingClient;
+  bool pendingClientValid;
+  bool pendingClientAliasedToActive;
 
   struct FrameHeader {
     uint8_t type;
