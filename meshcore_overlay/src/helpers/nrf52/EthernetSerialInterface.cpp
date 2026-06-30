@@ -103,7 +103,8 @@ EthernetSerialInterface::EthernetSerialInterface()
     : deviceConnected(false), ethernetReady(false), _isEnabled(false), _port(TCP_PORT),
       lastDhcpAttempt(0), lastMaintain(0), lastServiceLog(0), lastClientLog(0), lastDelayLog(0),
       server(nullptr), client(EthernetClient()), pendingClient(EthernetClient()), pendingClientSince(0),
-      pendingClientValid(false), injected_frame_len(0), injected_frame_valid(false) {
+      pendingClientValid(false), pendingClientAliasedToActive(false), injected_frame_len(0),
+      injected_frame_valid(false) {
   send_queue_len = recv_queue_len = 0;
   received_frame_header.type = 0;
   received_frame_header.length = 0;
@@ -314,14 +315,15 @@ void EthernetSerialInterface::dropClient() {
   if (client) {
     client.stop();
   }
+  pendingClientAliasedToActive = false;
   resetReceivedFrameHeader();
 }
 
 void EthernetSerialInterface::clearPendingClient() {
   pendingClientValid = false;
   pendingClientSince = 0;
+  pendingClientAliasedToActive = false;
   resetPendingReceivedFrameHeader();
-  pendingClient = EthernetClient();
 }
 
 void EthernetSerialInterface::clearInjectedFrame() {
@@ -341,7 +343,8 @@ void EthernetSerialInterface::promotePendingClientToActive() {
   resetReceivedFrameHeader();
   pendingClientValid = false;
   pendingClientSince = 0;
-  pendingClient = EthernetClient();
+  pendingClientAliasedToActive = true;
+  ETH_DEBUG_PRINTLN("TCP client connected");
 }
 
 void EthernetSerialInterface::serviceEthernet() {
@@ -382,16 +385,17 @@ void EthernetSerialInterface::serviceClient() {
   EthernetClient newClient = server->available();
   if (newClient) {
     if (deviceConnected && client && client.connected()) {
-      if (pendingClientValid) {
+      if (pendingClientValid || pendingClientAliasedToActive) {
         ETH_DEBUG_PRINTLN("rejecting extra TCP client, pending already exists");
         newClient.stop();
       } else {
         pendingClient = newClient;
         pendingClientValid = true;
         pendingClientSince = millis();
+        pendingClientAliasedToActive = false;
         ETH_DEBUG_PRINTLN("TCP pending client connected");
       }
-    } else if (pendingClientValid) {
+    } else if (pendingClientValid || pendingClientAliasedToActive) {
       ETH_DEBUG_PRINTLN("rejecting extra TCP client, pending already exists");
       newClient.stop();
     } else {

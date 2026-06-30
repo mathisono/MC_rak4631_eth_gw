@@ -183,6 +183,7 @@ class EthernetSerialInterface : public BaseSerialInterface {
   unsigned long lastDelayLog;
   unsigned long pendingClientSince;
   bool pendingClientValid;
+  bool pendingClientAliasedToActive;
   uint8_t injected_frame_buf[MAX_FRAME_SIZE];
   size_t injected_frame_len;
   bool injected_frame_valid;
